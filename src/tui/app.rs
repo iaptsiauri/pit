@@ -3,6 +3,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 use std::time::Duration;
 
+use crate::core::git_info::{self, TaskGitInfo};
 use crate::core::names;
 use crate::core::project::Project;
 use crate::core::reap;
@@ -114,13 +115,19 @@ pub struct App {
     pub error: Option<String>,
     pub repo_root: std::path::PathBuf,
     db_path: std::path::PathBuf,
+    /// Cached git info for the currently selected task.
+    pub detail: Option<TaskGitInfo>,
+    /// Which task id the cached detail belongs to.
+    detail_task_id: Option<i64>,
+    /// Scroll offset in the detail pane.
+    pub detail_scroll: u16,
 }
 
 impl App {
     fn new(project: &Project) -> Result<Self> {
         let tasks = task::list(&project.db)?;
         let existing: Vec<String> = tasks.iter().map(|t| t.name.clone()).collect();
-        Ok(App {
+        let mut app = App {
             tasks,
             selected: 0,
             should_quit: false,
@@ -129,7 +136,12 @@ impl App {
             error: None,
             repo_root: project.repo_root.clone(),
             db_path: project.pit_dir.join("pit.db"),
-        })
+            detail: None,
+            detail_task_id: None,
+            detail_scroll: 0,
+        };
+        app.refresh_detail();
+        Ok(app)
     }
 
     fn refresh(&mut self) -> Result<()> {
@@ -139,7 +151,31 @@ impl App {
         if !self.tasks.is_empty() && self.selected >= self.tasks.len() {
             self.selected = self.tasks.len() - 1;
         }
+        self.refresh_detail();
         Ok(())
+    }
+
+    /// Update the cached git detail for the currently selected task.
+    /// Only re-fetches if the selection changed.
+    fn refresh_detail(&mut self) {
+        let current_id = self.tasks.get(self.selected).map(|t| t.id);
+        if current_id == self.detail_task_id && self.detail.is_some() {
+            return;
+        }
+        self.detail_task_id = current_id;
+        self.detail_scroll = 0;
+        if let Some(task) = self.tasks.get(self.selected) {
+            self.detail = Some(git_info::gather(&self.repo_root, &task.branch));
+        } else {
+            self.detail = None;
+        }
+    }
+
+    /// Force re-fetch detail (e.g. after a refresh key).
+    fn force_refresh_detail(&mut self) {
+        self.detail_task_id = None;
+        self.detail = None;
+        self.refresh_detail();
     }
 
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
@@ -159,12 +195,14 @@ impl App {
             (KeyCode::Up | KeyCode::Char('k'), _) => {
                 if self.selected > 0 {
                     self.selected -= 1;
+                    self.refresh_detail();
                 }
                 Ok(Action::None)
             }
             (KeyCode::Down | KeyCode::Char('j'), _) => {
                 if !self.tasks.is_empty() && self.selected < self.tasks.len() - 1 {
                     self.selected += 1;
+                    self.refresh_detail();
                 }
                 Ok(Action::None)
             }
@@ -197,6 +235,7 @@ impl App {
             }
             (KeyCode::Char('r'), _) => {
                 self.refresh()?;
+                self.force_refresh_detail();
                 Ok(Action::None)
             }
             _ => Ok(Action::None),
@@ -523,6 +562,9 @@ mod tests {
             tasks,
             repo_root: std::path::PathBuf::from("/tmp"),
             db_path: std::path::PathBuf::from("/tmp/test.db"),
+            detail: None,
+            detail_task_id: None,
+            detail_scroll: 0,
         }
     }
 

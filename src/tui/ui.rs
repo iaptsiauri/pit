@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::core::task::Status;
@@ -14,7 +14,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Min(5), Constraint::Length(3)])
         .split(frame.area());
 
-    draw_task_list(frame, app, chunks[0]);
+    // Split the main area into task list (left) and detail (right)
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(chunks[0]);
+
+    draw_task_list(frame, app, panes[0]);
+    draw_detail_pane(frame, app, panes[1]);
     draw_help_bar(frame, app, chunks[1]);
 
     if app.mode == Mode::NewTask {
@@ -26,12 +33,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+// ── Task list (left pane) ───────────────────────────────────────────────────
+
 fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
     if app.tasks.is_empty() {
-        let msg = Paragraph::new("No tasks yet. Press n to create one.")
+        let msg = Paragraph::new("  No tasks yet.\n  Press n to create.")
             .block(
                 Block::default()
-                    .title(" pit — coding agent orchestrator ")
+                    .title(" Tasks ")
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)),
             )
@@ -44,51 +53,24 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
         .tasks
         .iter()
         .map(|t| {
-            let status_style = match t.status {
-                Status::Idle => Style::default().fg(Color::DarkGray),
-                Status::Running => Style::default().fg(Color::Green),
-                Status::Done => Style::default().fg(Color::Blue),
-                Status::Error => Style::default().fg(Color::Red),
-            };
+            let status_style = status_color(t.status.clone());
+            let icon = status_icon(&t.status);
 
-            let status_icon = match t.status {
-                Status::Idle => "○",
-                Status::Running => "▶",
-                Status::Done => "✓",
-                Status::Error => "✗",
-            };
+            // Compact: icon + name + short status
+            let name_width = area.width.saturating_sub(10) as usize;
+            let name: String = t.name.chars().take(name_width).collect();
 
-            let mut spans = vec![
-                Span::styled(format!(" {} ", status_icon), status_style),
-                Span::styled(
-                    format!("{:<24}", t.name),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(format!("{:<10}", t.status), status_style),
-            ];
-
-            if !t.prompt.is_empty() {
-                let preview: String = t.prompt.chars().take(30).collect();
-                let suffix = if t.prompt.len() > 30 { "…" } else { "" };
-                spans.push(Span::styled(
-                    format!("{}{}", preview, suffix),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            } else {
-                spans.push(Span::styled(
-                    &t.branch,
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-
-            ListItem::new(Line::from(spans))
+            ListItem::new(Line::from(vec![
+                Span::styled(format!(" {} ", icon), status_style),
+                Span::styled(name, Style::default().fg(Color::White)),
+            ]))
         })
         .collect();
 
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" pit — coding agent orchestrator ")
+                .title(" Tasks ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)),
         )
@@ -97,12 +79,243 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▸ ");
+        .highlight_symbol("▸");
 
     let mut state = ListState::default();
     state.select(Some(app.selected));
     frame.render_stateful_widget(list, area, &mut state);
 }
+
+// ── Detail pane (right side) ────────────────────────────────────────────────
+
+fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .title(" Detail ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let task = match app.tasks.get(app.selected) {
+        Some(t) => t,
+        None => {
+            let empty = Paragraph::new("  Select a task to view details.")
+                .style(Style::default().fg(Color::DarkGray))
+                .block(block);
+            frame.render_widget(empty, area);
+            return;
+        }
+    };
+
+    frame.render_widget(block, area);
+
+    let inner = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
+
+    // Build all lines for the detail view
+    let mut lines: Vec<Line> = Vec::new();
+    let w = inner.width as usize;
+
+    // ── Header ──
+    lines.push(Line::from(vec![
+        Span::styled(&task.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+    ]));
+
+    // Status + agent
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} {}", status_icon(&task.status), task.status),
+            status_color(task.status.clone()),
+        ),
+        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("agent: {}", task.agent),
+            Style::default().fg(Color::Gray),
+        ),
+    ]));
+
+    // Branch
+    lines.push(Line::from(vec![
+        Span::styled("branch: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(&task.branch, Style::default().fg(Color::Cyan)),
+    ]));
+
+    // Prompt (if set)
+    if !task.prompt.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("prompt: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&task.prompt, Style::default().fg(Color::Gray)),
+        ]));
+    }
+
+    // Issue URL (if set)
+    if !task.issue_url.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("issue:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                &task.issue_url,
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // ── Git info ──
+    if let Some(ref info) = app.detail {
+        // Commits section
+        let commit_count = info.commits.len();
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("── Commits ({}) ", commit_count),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "─".repeat(w.saturating_sub(16 + digit_count(commit_count))),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+
+        if info.commits.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No commits yet",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            for c in &info.commits {
+                let hash_span = Span::styled(
+                    format!("  {}", c.hash),
+                    Style::default().fg(Color::Yellow),
+                );
+                let msg_span = Span::styled(
+                    format!(" {}", c.message),
+                    Style::default().fg(Color::White),
+                );
+                let age_span = Span::styled(
+                    format!("  {}", c.age),
+                    Style::default().fg(Color::DarkGray),
+                );
+                lines.push(Line::from(vec![hash_span, msg_span, age_span]));
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        // Files changed section
+        let file_count = info.files.len();
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("── Changes ({} file{}) ", file_count, if file_count == 1 { "" } else { "s" }),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "─".repeat(w.saturating_sub(20 + digit_count(file_count))),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+
+        if info.files.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No changes",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            // Find max path length for alignment
+            let max_path = info
+                .files
+                .iter()
+                .map(|f| f.path.len())
+                .max()
+                .unwrap_or(0)
+                .min(w.saturating_sub(20));
+
+            for f in &info.files {
+                let path: String = f.path.chars().take(max_path).collect();
+                let padding = max_path.saturating_sub(path.len()) + 2;
+
+                let mut spans = vec![
+                    Span::styled(format!("  {}", path), Style::default().fg(Color::White)),
+                    Span::raw(" ".repeat(padding)),
+                ];
+
+                if f.insertions > 0 {
+                    spans.push(Span::styled(
+                        format!("+{}", f.insertions),
+                        Style::default().fg(Color::Green),
+                    ));
+                }
+                if f.insertions > 0 && f.deletions > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                if f.deletions > 0 {
+                    spans.push(Span::styled(
+                        format!("-{}", f.deletions),
+                        Style::default().fg(Color::Red),
+                    ));
+                }
+
+                lines.push(Line::from(spans));
+            }
+
+            // Total line
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("  total: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("+{}", info.total_insertions),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("-{}", info.total_deletions),
+                    Style::default().fg(Color::Red),
+                ),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Loading git info…",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((app.detail_scroll, 0));
+    frame.render_widget(paragraph, inner);
+}
+
+fn status_icon(status: &Status) -> &'static str {
+    match status {
+        Status::Idle => "○",
+        Status::Running => "▶",
+        Status::Done => "✓",
+        Status::Error => "✗",
+    }
+}
+
+fn status_color(status: Status) -> Style {
+    match status {
+        Status::Idle => Style::default().fg(Color::DarkGray),
+        Status::Running => Style::default().fg(Color::Green),
+        Status::Done => Style::default().fg(Color::Blue),
+        Status::Error => Style::default().fg(Color::Red),
+    }
+}
+
+fn digit_count(n: usize) -> usize {
+    if n == 0 { 1 } else { (n as f64).log10().floor() as usize + 1 }
+}
+
+// ── Modal ───────────────────────────────────────────────────────────────────
 
 fn draw_modal(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -255,6 +468,8 @@ fn draw_field_input(frame: &mut Frame, x: u16, y: u16, w: u16, value: &str, acti
     frame.render_widget(widget, Rect { x, y, width: w, height: 1 });
 }
 
+// ── Toast / Help ────────────────────────────────────────────────────────────
+
 fn draw_error_toast(frame: &mut Frame, msg: &str) {
     let area = frame.area();
     let toast_width = (msg.len() as u16 + 6).min(area.width.saturating_sub(4));
@@ -299,11 +514,11 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw(":open  "),
             Span::styled("b", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(":background  "),
+            Span::raw(":bg  "),
             Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":new  "),
             Span::styled("d", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(":delete  "),
+            Span::raw(":del  "),
             Span::styled("r", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":refresh  "),
             Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
