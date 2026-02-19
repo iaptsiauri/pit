@@ -57,7 +57,7 @@ fn main() -> Result<()> {
 }
 
 fn cmd_dashboard() -> Result<()> {
-    let project = open_project()?;
+    let project = open_or_init_project()?;
     tui::run(&project)
 }
 
@@ -107,4 +107,17 @@ fn cmd_delete(name: &str) -> Result<()> {
 fn open_project() -> Result<Project> {
     let cwd = PathBuf::from(".").canonicalize()?;
     Project::find_and_open(&cwd)
+}
+
+/// Open existing project, or auto-init if we're in a git repo.
+fn open_or_init_project() -> Result<Project> {
+    let cwd = PathBuf::from(".").canonicalize()?;
+    match Project::find_and_open(&cwd) {
+        Ok(p) => Ok(p),
+        Err(_) => {
+            let repo_root = Project::find_repo_root(&cwd)?;
+            eprintln!("Initializing pit in {} ...", repo_root.display());
+            Project::init(&repo_root)
+        }
+    }
 }

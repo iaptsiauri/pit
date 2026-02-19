@@ -5,24 +5,48 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::core::task::Status;
-use super::app::App;
+
+use super::app::{App, Mode};
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    let show_input = app.mode != Mode::Normal;
+    let show_error = app.error.is_some();
+
+    let mut constraints = vec![Constraint::Min(5)]; // Task list
+    if show_error {
+        constraints.push(Constraint::Length(1)); // Error line
+    }
+    if show_input {
+        constraints.push(Constraint::Length(3)); // Input bar
+    }
+    constraints.push(Constraint::Length(3)); // Help bar
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(5),    // Task list
-            Constraint::Length(3), // Help bar
-        ])
+        .constraints(constraints)
         .split(frame.area());
 
-    draw_task_list(frame, app, chunks[0]);
-    draw_help_bar(frame, chunks[1]);
+    let mut idx = 0;
+
+    draw_task_list(frame, app, chunks[idx]);
+    idx += 1;
+
+    if show_error {
+        draw_error(frame, app.error.as_deref().unwrap_or(""), chunks[idx]);
+        idx += 1;
+    }
+
+    if show_input {
+        draw_input(frame, app, chunks[idx]);
+        idx += 1;
+    }
+
+    draw_help_bar(frame, app, chunks[idx]);
 }
 
 fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
     if app.tasks.is_empty() {
-        let msg = Paragraph::new("No tasks. Create one with: pit new <name>")
+        let msg = Paragraph::new("No tasks yet. Press n to create one.")
             .block(
                 Block::default()
                     .title(" pit — coding agent orchestrator ")
@@ -58,14 +82,8 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
                     format!("{:<24}", t.name),
                     Style::default().fg(Color::White),
                 ),
-                Span::styled(
-                    format!("{:<10}", t.status),
-                    status_style,
-                ),
-                Span::styled(
-                    &t.branch,
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("{:<10}", t.status), status_style),
+                Span::styled(&t.branch, Style::default().fg(Color::DarkGray)),
             ]);
             ListItem::new(line)
         })
@@ -90,19 +108,94 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_help_bar(frame: &mut Frame, area: Rect) {
-    let help = Line::from(vec![
-        Span::styled(" Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(":open  "),
-        Span::styled("b", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(":background  "),
-        Span::styled("d", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(":delete  "),
-        Span::styled("r", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(":refresh  "),
-        Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(":quit"),
-    ]);
+fn draw_error(frame: &mut Frame, msg: &str, area: Rect) {
+    let err = Paragraph::new(Span::styled(
+        format!(" ✗ {}", msg),
+        Style::default().fg(Color::Red),
+    ));
+    frame.render_widget(err, area);
+}
+
+fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
+    let input = Paragraph::new(app.input.as_str()).block(
+        Block::default()
+            .title(format!(" {} ", app.input_label))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+    frame.render_widget(input, area);
+
+    // Place cursor at end of input
+    frame.set_cursor_position((
+        area.x + app.input.len() as u16 + 1,
+        area.y + 1,
+    ));
+}
+
+fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let help = if app.mode != Mode::Normal {
+        Line::from(vec![
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":confirm  "),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":cancel"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":open  "),
+            Span::styled(
+                "b",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":background  "),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":new  "),
+            Span::styled(
+                "d",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":delete  "),
+            Span::styled(
+                "r",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":refresh  "),
+            Span::styled(
+                "q",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":quit"),
+        ])
+    };
 
     let bar = Paragraph::new(help).block(
         Block::default()

@@ -8,11 +8,26 @@ use crate::core::task::{self, Task};
 
 use super::ui;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Mode {
+    Normal,
+    /// Typing a new task name.
+    InputName,
+    /// Typing a description for the new task.
+    InputDescription,
+}
+
 /// Application state for the TUI.
 pub struct App {
     pub tasks: Vec<Task>,
     pub selected: usize,
     pub should_quit: bool,
+    pub mode: Mode,
+    pub input: String,
+    pub input_label: &'static str,
+    pub error: Option<String>,
+    /// Stashed task name while entering description.
+    pending_name: Option<String>,
     pub repo_root: std::path::PathBuf,
     db_path: std::path::PathBuf,
 }
@@ -24,6 +39,11 @@ impl App {
             tasks,
             selected: 0,
             should_quit: false,
+            mode: Mode::Normal,
+            input: String::new(),
+            input_label: "",
+            error: None,
+            pending_name: None,
             repo_root: project.repo_root.clone(),
             db_path: project.pit_dir.join("pit.db"),
         })
@@ -41,6 +61,17 @@ impl App {
     }
 
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        // Clear error on any keypress
+        self.error = None;
+
+        match self.mode {
+            Mode::Normal => self.handle_normal_key(code, modifiers),
+            Mode::InputName => self.handle_input_name_key(code, modifiers),
+            Mode::InputDescription => self.handle_input_desc_key(code, modifiers),
+        }
+    }
+
+    fn handle_normal_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
         match (code, modifiers) {
             (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.should_quit = true;
@@ -79,8 +110,78 @@ impl App {
                     Ok(Action::None)
                 }
             }
+            (KeyCode::Char('n'), _) => {
+                self.mode = Mode::InputName;
+                self.input.clear();
+                self.input_label = "Task name";
+                Ok(Action::None)
+            }
             (KeyCode::Char('r'), _) => {
                 self.refresh()?;
+                Ok(Action::None)
+            }
+            _ => Ok(Action::None),
+        }
+    }
+
+    fn handle_input_name_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => {
+                self.mode = Mode::Normal;
+                self.input.clear();
+                Ok(Action::None)
+            }
+            (KeyCode::Enter, _) => {
+                let name = self.input.trim().to_string();
+                if name.is_empty() {
+                    self.mode = Mode::Normal;
+                    self.input.clear();
+                    return Ok(Action::None);
+                }
+                // Validate name before moving to description
+                if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                    self.error = Some("Name: only alphanumeric, hyphens, underscores".into());
+                    return Ok(Action::None);
+                }
+                self.pending_name = Some(name);
+                self.input.clear();
+                self.mode = Mode::InputDescription;
+                self.input_label = "Description (optional, Enter to skip)";
+                Ok(Action::None)
+            }
+            (KeyCode::Backspace, _) => {
+                self.input.pop();
+                Ok(Action::None)
+            }
+            (KeyCode::Char(c), _) if !modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.push(c);
+                Ok(Action::None)
+            }
+            _ => Ok(Action::None),
+        }
+    }
+
+    fn handle_input_desc_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => {
+                self.mode = Mode::Normal;
+                self.input.clear();
+                self.pending_name = None;
+                Ok(Action::None)
+            }
+            (KeyCode::Enter, _) => {
+                let description = self.input.trim().to_string();
+                let name = self.pending_name.take().unwrap_or_default();
+                self.input.clear();
+                self.mode = Mode::Normal;
+                Ok(Action::CreateTask(name, description))
+            }
+            (KeyCode::Backspace, _) => {
+                self.input.pop();
+                Ok(Action::None)
+            }
+            (KeyCode::Char(c), _) if !modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.push(c);
                 Ok(Action::None)
             }
             _ => Ok(Action::None),
@@ -89,11 +190,12 @@ impl App {
 }
 
 #[derive(Debug)]
-enum Action {
+pub enum Action {
     None,
     Enter(i64),
     Background(i64),
     Delete(i64),
+    CreateTask(String, String),
 }
 
 /// Run the TUI dashboard. Returns when user quits.
@@ -136,6 +238,14 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                         handle_delete(app, task_id)?;
                         app.refresh()?;
                     }
+                    Action::CreateTask(name, description) => {
+                        handle_create(app, &name, &description)?;
+                        app.refresh()?;
+                        // Select the newly created task (last in list)
+                        if !app.tasks.is_empty() {
+                            app.selected = app.tasks.len() - 1;
+                        }
+                    }
                 }
             }
         }
@@ -147,6 +257,18 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         // Auto-refresh every loop iteration to catch status changes
         // (cheap — just reads from SQLite)
         app.refresh()?;
+    }
+}
+
+/// Create a new task from the TUI.
+fn handle_create(app: &mut App, name: &str, description: &str) -> Result<()> {
+    let db = crate::db::open(&app.db_path)?;
+    match task::create(&db, &app.repo_root, name, description) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            app.error = Some(e.to_string());
+            Ok(())
+        }
     }
 }
 
@@ -297,6 +419,11 @@ mod tests {
         App {
             selected: 0,
             should_quit: false,
+            mode: Mode::Normal,
+            input: String::new(),
+            input_label: "",
+            error: None,
+            pending_name: None,
             tasks,
             repo_root: std::path::PathBuf::from("/tmp"),
             db_path: std::path::PathBuf::from("/tmp/test.db"),
@@ -344,7 +471,6 @@ mod tests {
         ];
         let mut app = make_app(tasks);
 
-        // Start at 0, move down
         app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 1);
 
@@ -355,7 +481,6 @@ mod tests {
         app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 2);
 
-        // Move up
         app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 1);
 
@@ -403,5 +528,126 @@ mod tests {
 
         let action = app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE).unwrap();
         assert!(matches!(action, Action::Delete(1)));
+    }
+
+    #[test]
+    fn n_enters_input_mode() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::InputName);
+        assert_eq!(app.input_label, "Task name");
+    }
+
+    #[test]
+    fn input_mode_typing_and_backspace() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        // Type "fix-bug"
+        for c in "fix-bug".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+        assert_eq!(app.input, "fix-bug");
+
+        // Backspace
+        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.input, "fix-bu");
+    }
+
+    #[test]
+    fn input_mode_esc_cancels() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        for c in "test".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn input_name_then_description_creates_task() {
+        let mut app = make_app(vec![]);
+
+        // Press n
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::InputName);
+
+        // Type name
+        for c in "my-task".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        // Enter → moves to description
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::InputDescription);
+        assert!(app.input.is_empty());
+
+        // Type description
+        for c in "do stuff".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        // Enter → creates task
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(matches!(action, Action::CreateTask(name, desc) if name == "my-task" && desc == "do stuff"));
+    }
+
+    #[test]
+    fn input_empty_name_cancels() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        // Enter with empty input → back to normal
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn input_invalid_name_shows_error() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        for c in "has spaces".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::InputName); // stays in input mode
+        assert!(app.error.is_some());
+    }
+
+    #[test]
+    fn esc_during_description_cancels() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        for c in "task".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::InputDescription);
+
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.pending_name.is_none());
+    }
+
+    #[test]
+    fn skip_description_with_enter() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        for c in "quick".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+
+        // Empty description, just press Enter
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::CreateTask(name, desc) if name == "quick" && desc.is_empty()));
     }
 }
