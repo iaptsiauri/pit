@@ -498,7 +498,7 @@ fn draw_modal(frame: &mut Frame, app: &App) {
                 Span::styled("Enter", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 Span::styled(" or ", Style::default().fg(Color::DarkGray)),
                 Span::styled("Ctrl+L", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(" to pick a Linear issue", Style::default().fg(Color::DarkGray)),
+                Span::styled(" to link an issue", Style::default().fg(Color::DarkGray)),
             ])
         } else {
             Line::from(Span::styled("  — no issue linked", Style::default().fg(Color::DarkGray)))
@@ -775,7 +775,7 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
                 "Ctrl+L",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(":Linear  "),
+            Span::raw(":issue  "),
             Span::styled(
                 "Enter",
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
