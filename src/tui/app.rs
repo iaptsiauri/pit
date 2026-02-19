@@ -91,7 +91,7 @@ pub struct ModalState {
     pub picker_status: Option<String>,
 }
 
-const AGENTS: &[&str] = &["claude", "codex", "amp", "aider", "custom"];
+const AGENTS: &[&str] = &["claude", "pi", "codex", "amp", "aider", "goose", "custom"];
 
 impl ModalState {
     fn new(existing_names: &[String]) -> Self {
@@ -1095,6 +1095,17 @@ pub fn build_agent_cmd(task: &Task) -> (String, String) {
     let prompt_path = prompt_file.to_string_lossy();
 
     let cmd = match task.agent.as_str() {
+        "pi" => {
+            // Pi coding agent: --continue resumes last session, prompt is positional
+            // Pi uses -p for non-interactive (like claude), so prompt is positional
+            if is_resume {
+                "pi --continue".to_string()
+            } else if !task.prompt.is_empty() {
+                format!("pi \"$(cat '{}')\"", prompt_path)
+            } else {
+                "pi".to_string()
+            }
+        }
         "codex" => {
             if !task.prompt.is_empty() {
                 format!("codex \"$(cat '{}')\"", prompt_path)
@@ -1114,6 +1125,14 @@ pub fn build_agent_cmd(task: &Task) -> (String, String) {
                 format!("amp --prompt \"$(cat '{}')\"", prompt_path)
             } else {
                 "amp".to_string()
+            }
+        }
+        "goose" => {
+            // Block's Goose agent: prompt via positional arg
+            if !task.prompt.is_empty() {
+                format!("goose \"$(cat '{}')\"", prompt_path)
+            } else {
+                "goose".to_string()
             }
         }
         "custom" => {
@@ -1449,6 +1468,10 @@ mod tests {
         app.modal.field = ModalField::Agent;
         assert_eq!(app.modal.agent, "claude");
 
+        // claude → pi → codex → amp → aider → goose → custom → claude
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.agent, "pi");
+
         app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.agent, "codex");
 
@@ -1608,8 +1631,9 @@ mod tests {
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
             .unwrap();
 
-        // Cycle to codex
+        // Cycle to codex (claude → pi → codex)
         app.modal.field = ModalField::Agent;
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
         app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.agent, "codex");
 
@@ -1637,8 +1661,16 @@ mod tests {
     // --- build_agent_cmd ---
 
     fn make_task_with_agent(agent: &str, prompt: &str, session_id: Option<&str>) -> Task {
-        let worktree = "/tmp/pit-test-wt";
-        let _ = std::fs::create_dir_all(worktree);
+        // Use a unique worktree per agent+prompt to avoid parallel test races
+        let hash = format!("{:x}", {
+            let mut h: u64 = 0;
+            for b in format!("{}-{}", agent, prompt).bytes() {
+                h = h.wrapping_mul(31).wrapping_add(b as u64);
+            }
+            h
+        });
+        let worktree = format!("/tmp/pit-test-wt-{}", hash);
+        let _ = std::fs::create_dir_all(&worktree);
         Task {
             id: 1,
             name: "test".to_string(),
@@ -1647,7 +1679,7 @@ mod tests {
             issue_url: String::new(),
             agent: agent.to_string(),
             branch: "pit/test".to_string(),
-            worktree: worktree.to_string(),
+            worktree,
             status: task::Status::Idle,
             session_id: session_id.map(|s| s.to_string()),
             tmux_session: None,
@@ -1657,8 +1689,8 @@ mod tests {
         }
     }
 
-    fn prompt_file_path() -> String {
-        "/tmp/pit-test-wt/.pit-prompt".to_string()
+    fn prompt_file_for(task: &Task) -> String {
+        format!("{}/.pit-prompt", task.worktree)
     }
 
     #[test]
@@ -1671,7 +1703,7 @@ mod tests {
         assert!(cmd.contains("$(cat '"), "got: {}", cmd);
         assert!(!cmd.contains("-p "), "should not use -p: {}", cmd);
         // Prompt file written
-        let content = std::fs::read_to_string(prompt_file_path()).unwrap();
+        let content = std::fs::read_to_string(prompt_file_for(&task)).unwrap();
         assert_eq!(content, "fix bug");
     }
 
@@ -1702,7 +1734,7 @@ mod tests {
         let task = make_task_with_agent("codex", "refactor API", None);
         let (cmd, _) = build_agent_cmd(&task);
         assert!(cmd.starts_with("codex \"$(cat '"), "got: {}", cmd);
-        let content = std::fs::read_to_string(prompt_file_path()).unwrap();
+        let content = std::fs::read_to_string(prompt_file_for(&task)).unwrap();
         assert_eq!(content, "refactor API");
     }
 
@@ -1742,6 +1774,43 @@ mod tests {
     }
 
     #[test]
+    fn agent_cmd_pi_with_prompt() {
+        let task = make_task_with_agent("pi", "fix the login bug", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert!(cmd.starts_with("pi \"$(cat '"), "got: {}", cmd);
+        let content = std::fs::read_to_string(prompt_file_for(&task)).unwrap();
+        assert_eq!(content, "fix the login bug");
+    }
+
+    #[test]
+    fn agent_cmd_pi_no_prompt() {
+        let task = make_task_with_agent("pi", "", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "pi");
+    }
+
+    #[test]
+    fn agent_cmd_pi_resume() {
+        let task = make_task_with_agent("pi", "fix bug", Some("sess-456"));
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "pi --continue");
+    }
+
+    #[test]
+    fn agent_cmd_goose_with_prompt() {
+        let task = make_task_with_agent("goose", "add tests", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert!(cmd.starts_with("goose \"$(cat '"), "got: {}", cmd);
+    }
+
+    #[test]
+    fn agent_cmd_goose_no_prompt() {
+        let task = make_task_with_agent("goose", "", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "goose");
+    }
+
+    #[test]
     fn agent_cmd_custom_with_prompt() {
         let task = make_task_with_agent("custom", "my-script --flag", None);
         let (cmd, _) = build_agent_cmd(&task);
@@ -1773,7 +1842,7 @@ mod tests {
         // Command uses file-based prompt, not inline
         assert!(cmd.contains("$(cat '"), "got: {}", cmd);
         // File contains the exact prompt, unescaped
-        let content = std::fs::read_to_string(prompt_file_path()).unwrap();
+        let content = std::fs::read_to_string(prompt_file_for(&task)).unwrap();
         assert_eq!(content, prompt);
     }
 
