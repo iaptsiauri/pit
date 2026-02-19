@@ -129,6 +129,12 @@ pub struct App {
     detail_task_id: Option<i64>,
     /// Scroll offset in the detail pane.
     pub detail_scroll: u16,
+    /// Which file index is selected in the detail pane (None = no file selected).
+    pub file_cursor: Option<usize>,
+    /// Which files have their diff expanded.
+    pub expanded_files: std::collections::HashSet<usize>,
+    /// Cached file diffs (file index → diff lines).
+    pub file_diffs: std::collections::HashMap<usize, Vec<String>>,
 }
 
 impl App {
@@ -148,6 +154,9 @@ impl App {
             detail: None,
             detail_task_id: None,
             detail_scroll: 0,
+            file_cursor: None,
+            expanded_files: std::collections::HashSet::new(),
+            file_diffs: std::collections::HashMap::new(),
         };
         app.refresh_detail();
         Ok(app)
@@ -173,6 +182,9 @@ impl App {
         }
         self.detail_task_id = current_id;
         self.detail_scroll = 0;
+        self.file_cursor = None;
+        self.expanded_files.clear();
+        self.file_diffs.clear();
         if let Some(task) = self.tasks.get(self.selected) {
             self.detail = Some(git_info::gather(&self.repo_root, &task.branch));
         } else {
@@ -281,41 +293,96 @@ impl App {
         }
     }
 
+    /// How many files are in the current detail.
+    fn file_count(&self) -> usize {
+        self.detail
+            .as_ref()
+            .map(|d| d.files.len())
+            .unwrap_or(0)
+    }
+
     fn handle_detail_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        let nfiles = self.file_count();
+
         match (code, modifiers) {
-            (KeyCode::Up | KeyCode::Char('k'), _) => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(1);
-                Ok(Action::None)
-            }
             (KeyCode::Down | KeyCode::Char('j'), _) => {
-                self.detail_scroll = self.detail_scroll.saturating_add(1);
+                if nfiles == 0 {
+                    return Ok(Action::None);
+                }
+                match self.file_cursor {
+                    None => {
+                        self.file_cursor = Some(0);
+                    }
+                    Some(i) if i + 1 < nfiles => {
+                        self.file_cursor = Some(i + 1);
+                    }
+                    _ => {}
+                }
                 Ok(Action::None)
             }
-            // Page up/down for faster scrolling
-            (KeyCode::PageUp, _) => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(10);
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
+                match self.file_cursor {
+                    Some(0) => {
+                        self.file_cursor = None;
+                    }
+                    Some(i) => {
+                        self.file_cursor = Some(i - 1);
+                    }
+                    None => {}
+                }
                 Ok(Action::None)
             }
+            // Enter: toggle file diff expansion
+            (KeyCode::Enter, _) => {
+                if let Some(idx) = self.file_cursor {
+                    if self.expanded_files.contains(&idx) {
+                        self.expanded_files.remove(&idx);
+                    } else {
+                        // Fetch diff if not cached
+                        if !self.file_diffs.contains_key(&idx) {
+                            if let (Some(task), Some(info)) =
+                                (self.tasks.get(self.selected), self.detail.as_ref())
+                            {
+                                if let Some(file) = info.files.get(idx) {
+                                    let diff = git_info::file_diff(
+                                        &self.repo_root,
+                                        &task.branch,
+                                        &file.path,
+                                    );
+                                    self.file_diffs.insert(idx, diff);
+                                }
+                            }
+                        }
+                        self.expanded_files.insert(idx);
+                    }
+                } else {
+                    // No file selected — launch agent
+                    if let Some(t) = self.tasks.get(self.selected) {
+                        return Ok(Action::Enter(t.id));
+                    }
+                }
+                Ok(Action::None)
+            }
+            // Scroll the whole pane (for when content overflows)
             (KeyCode::PageDown, _) => {
                 self.detail_scroll = self.detail_scroll.saturating_add(10);
                 Ok(Action::None)
             }
-            // Home/End
+            (KeyCode::PageUp, _) => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(10);
+                Ok(Action::None)
+            }
             (KeyCode::Home, _) | (KeyCode::Char('g'), _) => {
                 self.detail_scroll = 0;
+                self.file_cursor = None;
                 Ok(Action::None)
             }
             (KeyCode::End, _) | (KeyCode::Char('G'), _) => {
-                self.detail_scroll = u16::MAX; // will be clamped by renderer
-                Ok(Action::None)
-            }
-            // Enter still launches the agent even from detail pane
-            (KeyCode::Enter, _) => {
-                if let Some(t) = self.tasks.get(self.selected) {
-                    Ok(Action::Enter(t.id))
-                } else {
-                    Ok(Action::None)
+                self.detail_scroll = u16::MAX;
+                if nfiles > 0 {
+                    self.file_cursor = Some(nfiles - 1);
                 }
+                Ok(Action::None)
             }
             (KeyCode::Char('b'), _) => {
                 if let Some(t) = self.tasks.get(self.selected) {
@@ -659,7 +726,21 @@ mod tests {
             detail: None,
             detail_task_id: None,
             detail_scroll: 0,
+            file_cursor: None,
+            expanded_files: std::collections::HashSet::new(),
+            file_diffs: std::collections::HashMap::new(),
         }
+    }
+
+    fn make_app_with_files(tasks: Vec<Task>, files: Vec<git_info::FileStat>) -> App {
+        let mut app = make_app(tasks);
+        app.detail = Some(TaskGitInfo {
+            commits: vec![],
+            files,
+            total_insertions: 0,
+            total_deletions: 0,
+        });
+        app
     }
 
     fn make_task(id: i64, name: &str, status: task::Status) -> Task {
@@ -1152,30 +1233,152 @@ mod tests {
         assert_eq!(app.focus, Pane::TaskList);
     }
 
+    // --- File navigation in detail pane ---
+
+    fn sample_files() -> Vec<git_info::FileStat> {
+        vec![
+            git_info::FileStat { path: "src/main.rs".into(), insertions: 10, deletions: 2 },
+            git_info::FileStat { path: "src/lib.rs".into(), insertions: 5, deletions: 0 },
+            git_info::FileStat { path: "Cargo.toml".into(), insertions: 1, deletions: 0 },
+        ]
+    }
+
     #[test]
-    fn jk_in_detail_scrolls() {
-        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+    fn jk_in_detail_moves_file_cursor() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+        assert_eq!(app.file_cursor, None);
+
+        // First j: selects first file
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(0));
+
+        // Second j: moves to second file
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(1));
+
+        // Third j: moves to third file
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(2));
+
+        // Fourth j: stays at last file
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(2));
+
+        // k: moves back
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(1));
+
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(0));
+
+        // k from first file: deselects (back to None)
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, None);
+
+        // k from None: stays None
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, None);
+    }
+
+    #[test]
+    fn jk_in_detail_no_files_is_noop() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            vec![],
+        );
         app.focus = Pane::Detail;
 
         app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
-        assert_eq!(app.detail_scroll, 1);
+        assert_eq!(app.file_cursor, None);
+    }
 
+    #[test]
+    fn enter_on_file_toggles_expansion() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Navigate to first file
         app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
-        assert_eq!(app.detail_scroll, 2);
+        assert_eq!(app.file_cursor, Some(0));
+        assert!(!app.expanded_files.contains(&0));
 
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
-        assert_eq!(app.detail_scroll, 1);
+        // Enter: expand
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(app.expanded_files.contains(&0));
 
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
-        assert_eq!(app.detail_scroll, 0);
+        // Enter again: collapse
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(!app.expanded_files.contains(&0));
+    }
 
-        // Can't scroll below 0
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+    #[test]
+    fn enter_with_no_file_selected_launches_agent() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+        assert_eq!(app.file_cursor, None);
+
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::Enter(1)));
+    }
+
+    #[test]
+    fn multiple_files_can_be_expanded() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Expand file 0
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(app.expanded_files.contains(&0));
+
+        // Move to file 1 and expand
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(app.expanded_files.contains(&0));
+        assert!(app.expanded_files.contains(&1));
+    }
+
+    #[test]
+    fn g_resets_file_cursor() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+        app.file_cursor = Some(2);
+
+        app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, None);
         assert_eq!(app.detail_scroll, 0);
     }
 
     #[test]
-    fn jk_in_tasklist_moves_selection_not_scroll() {
+    fn G_selects_last_file() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        app.handle_key(KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(2)); // last of 3 files
+    }
+
+    #[test]
+    fn jk_in_tasklist_moves_selection_not_file_cursor() {
         let mut app = make_app(vec![
             make_task(1, "a", task::Status::Idle),
             make_task(2, "b", task::Status::Idle),
@@ -1184,7 +1387,7 @@ mod tests {
 
         app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 1);
-        assert_eq!(app.detail_scroll, 0);
+        assert_eq!(app.file_cursor, None);
     }
 
     #[test]
@@ -1203,19 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn g_goes_to_top_G_goes_to_bottom() {
-        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
-        app.focus = Pane::Detail;
-
-        app.handle_key(KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
-        assert_eq!(app.detail_scroll, u16::MAX);
-
-        app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
-        assert_eq!(app.detail_scroll, 0);
-    }
-
-    #[test]
-    fn enter_works_from_detail_pane() {
+    fn enter_works_from_detail_pane_no_files() {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.focus = Pane::Detail;
 

@@ -29,6 +29,49 @@ pub struct TaskGitInfo {
     pub total_deletions: u32,
 }
 
+/// Get the diff for a single file between main and branch.
+/// Returns the diff output as lines (without the diff header noise).
+pub fn file_diff(repo_root: &Path, branch: &str, file_path: &str) -> Vec<String> {
+    let main = match detect_main_branch(repo_root) {
+        Ok(m) => m,
+        Err(_) => return vec![],
+    };
+
+    let range = format!("{}...{}", main, branch);
+    let output = match Command::new("git")
+        .args(["diff", &range, "--", file_path])
+        .current_dir(repo_root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+
+    if !output.status.success() {
+        return vec![];
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Skip the header lines (diff --git, index, ---, +++) and just show hunks
+    stdout
+        .lines()
+        .skip_while(|line| {
+            line.starts_with("diff --git")
+                || line.starts_with("index ")
+                || line.starts_with("--- ")
+                || line.starts_with("+++ ")
+                || line.starts_with("new file")
+                || line.starts_with("old mode")
+                || line.starts_with("new mode")
+                || line.starts_with("deleted file")
+                || line.starts_with("similarity")
+                || line.starts_with("rename")
+                || line.starts_with("Binary")
+        })
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// Detect the main branch name (main or master).
 fn detect_main_branch(repo_root: &Path) -> Result<String> {
     for name in &["main", "master"] {
@@ -392,5 +435,47 @@ mod tests {
 
         let test = info.files.iter().find(|f| f.path == "test.rs").unwrap();
         assert!(test.insertions > 0, "test.rs should have insertions");
+    }
+
+    #[test]
+    fn file_diff_returns_hunks() {
+        let (repo, branch) = make_repo_with_branch();
+        let lines = file_diff(repo.path(), &branch, "src.rs");
+
+        assert!(!lines.is_empty(), "should have diff lines");
+        // First line should be a hunk header
+        assert!(
+            lines[0].starts_with("@@"),
+            "expected hunk header, got: {}",
+            lines[0]
+        );
+        // Should contain added lines
+        assert!(
+            lines.iter().any(|l| l.starts_with('+')),
+            "should have additions"
+        );
+    }
+
+    #[test]
+    fn file_diff_new_file() {
+        let (repo, branch) = make_repo_with_branch();
+        let lines = file_diff(repo.path(), &branch, "test.rs");
+
+        assert!(!lines.is_empty());
+        assert!(lines.iter().any(|l| l.starts_with('+')));
+    }
+
+    #[test]
+    fn file_diff_nonexistent_file() {
+        let (repo, branch) = make_repo_with_branch();
+        let lines = file_diff(repo.path(), &branch, "nope.rs");
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn file_diff_nonexistent_branch() {
+        let (repo, _) = make_repo_with_branch();
+        let lines = file_diff(repo.path(), "pit/nope", "src.rs");
+        assert!(lines.is_empty());
     }
 }

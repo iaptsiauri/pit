@@ -233,6 +233,8 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
+            let in_detail = focused;
+
             // Find max path length for alignment
             let max_path = info
                 .files
@@ -242,12 +244,31 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 .unwrap_or(0)
                 .min(w.saturating_sub(20));
 
-            for f in &info.files {
+            for (idx, f) in info.files.iter().enumerate() {
+                let is_selected = in_detail && app.file_cursor == Some(idx);
+                let is_expanded = app.expanded_files.contains(&idx);
+
                 let path: String = f.path.chars().take(max_path).collect();
                 let padding = max_path.saturating_sub(path.len()) + 2;
 
+                // Cursor marker and expand indicator
+                let marker = if is_selected { "▸ " } else { "  " };
+                let expand = if is_expanded { "▾ " } else if in_detail { "▸ " } else { "" };
+
+                let path_style = if is_selected {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
                 let mut spans = vec![
-                    Span::styled(format!("  {}", path), Style::default().fg(Color::White)),
+                    Span::styled(marker, if is_selected {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }),
+                    Span::styled(expand, Style::default().fg(Color::DarkGray)),
+                    Span::styled(path, path_style),
                     Span::raw(" ".repeat(padding)),
                 ];
 
@@ -268,6 +289,36 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 }
 
                 lines.push(Line::from(spans));
+
+                // Render expanded diff lines
+                if is_expanded {
+                    if let Some(diff_lines) = app.file_diffs.get(&idx) {
+                        if diff_lines.is_empty() {
+                            lines.push(Line::from(Span::styled(
+                                "      (no diff content)",
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        } else {
+                            for dl in diff_lines {
+                                let (style, prefix) = if dl.starts_with('+') {
+                                    (Style::default().fg(Color::Green), "")
+                                } else if dl.starts_with('-') {
+                                    (Style::default().fg(Color::Red), "")
+                                } else if dl.starts_with("@@") {
+                                    (Style::default().fg(Color::Cyan), "")
+                                } else {
+                                    (Style::default().fg(Color::DarkGray), "")
+                                };
+                                let display: String = dl.chars().take(w.saturating_sub(6) as usize).collect();
+                                lines.push(Line::from(Span::styled(
+                                    format!("    {}{}", prefix, display),
+                                    style,
+                                )));
+                            }
+                        }
+                        lines.push(Line::from("")); // blank after diff
+                    }
+                }
             }
 
             // Total line
@@ -517,13 +568,11 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
                 " j/k",
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(":scroll  "),
-            Span::styled("g/G", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(":top/bottom  "),
+            Span::raw(":navigate  "),
+            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":expand diff  "),
             Span::styled("h/←", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":back  "),
-            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(":open  "),
             Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":new  "),
             Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
