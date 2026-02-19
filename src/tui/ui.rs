@@ -233,8 +233,6 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            let in_detail = focused;
-
             // Find max path length for alignment
             let max_path = info
                 .files
@@ -245,7 +243,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 .min(w.saturating_sub(20));
 
             for (idx, f) in info.files.iter().enumerate() {
-                let is_selected = in_detail && app.file_cursor == Some(idx);
+                let is_selected = focused && app.file_cursor == Some(idx);
                 let is_expanded = app.expanded_files.contains(&idx);
 
                 let path: String = f.path.chars().take(max_path).collect();
@@ -253,7 +251,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 
                 // Cursor marker and expand indicator
                 let marker = if is_selected { "▸ " } else { "  " };
-                let expand = if is_expanded { "▾ " } else if in_detail { "▸ " } else { "" };
+                let expand = if is_expanded { "▾ " } else { "▸ " };
 
                 let path_style = if is_selected {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)

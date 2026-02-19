@@ -1449,4 +1449,78 @@ mod tests {
         app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.focus, Pane::Detail); // stays in detail
     }
+
+    #[test]
+    fn jk_navigates_between_files_with_expanded_diff() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Select and expand file 0
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(0));
+        // Simulate expanding with cached diff
+        app.expanded_files.insert(0);
+        app.file_diffs.insert(0, vec![
+            "@@ -0,0 +1,10 @@".into(),
+            "+fn main() {}".into(),
+            "+// lots of lines".into(),
+        ]);
+
+        // j should skip past the expanded diff to file 1
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(1));
+        // file 0 still expanded
+        assert!(app.expanded_files.contains(&0));
+
+        // k goes back to file 0 (still expanded)
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(0));
+        assert!(app.expanded_files.contains(&0));
+    }
+
+    #[test]
+    fn switching_pane_preserves_file_cursor() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Select file 1
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(1));
+
+        // Switch to task list and back
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::TaskList);
+        assert_eq!(app.file_cursor, Some(1)); // preserved
+
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::Detail);
+        assert_eq!(app.file_cursor, Some(1)); // still there
+    }
+
+    #[test]
+    fn expanded_files_preserved_across_pane_switch() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Expand file 0
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.expanded_files.insert(0);
+
+        // Switch panes and back
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+
+        // Still expanded
+        assert!(app.expanded_files.contains(&0));
+    }
 }
