@@ -17,6 +17,7 @@ use super::ui;
 pub enum Mode {
     Normal,
     NewTask,
+    IssuePicker,
 }
 
 /// Which pane has focus.
@@ -73,6 +74,11 @@ pub struct ModalState {
     pub issue_status: Option<String>,
     /// Whether we already tried fetching for this URL (avoid re-fetching on every tab)
     issue_fetched_url: String,
+    /// Linear issue picker state
+    pub picker_query: String,
+    pub picker_results: Vec<crate::core::linear::LinearIssue>,
+    pub picker_selected: usize,
+    pub picker_status: Option<String>,
 }
 
 const AGENTS: &[&str] = &["claude", "codex", "amp", "aider", "custom"];
@@ -88,6 +94,10 @@ impl ModalState {
             auto_approve: false,
             issue_status: None,
             issue_fetched_url: String::new(),
+            picker_query: String::new(),
+            picker_results: Vec::new(),
+            picker_selected: 0,
+            picker_status: None,
         }
     }
 
@@ -257,6 +267,7 @@ impl App {
         match self.mode {
             Mode::Normal => self.handle_normal_key(code, modifiers),
             Mode::NewTask => self.handle_modal_key(code, modifiers),
+            Mode::IssuePicker => self.handle_picker_key(code, modifiers),
         }
     }
 
@@ -597,6 +608,31 @@ impl App {
                 Ok(Action::None)
             }
 
+            // Ctrl+L: open Linear issue picker (from any field)
+            (KeyCode::Char('l'), m) if m.contains(KeyModifiers::CONTROL) => {
+                if crate::core::config::get("linear.api_key").is_some() {
+                    self.mode = Mode::IssuePicker;
+                    self.modal.picker_query.clear();
+                    self.modal.picker_selected = 0;
+                    self.modal.picker_status = Some("Loading your issues…".to_string());
+                    // Pre-load assigned issues
+                    match crate::core::linear::my_issues(20) {
+                        Ok(issues) => {
+                            self.modal.picker_status = Some(format!("{} issue(s)", issues.len()));
+                            self.modal.picker_results = issues;
+                        }
+                        Err(e) => {
+                            let msg: String = e.to_string().chars().take(60).collect();
+                            self.modal.picker_status = Some(format!("✗ {}", msg));
+                            self.modal.picker_results.clear();
+                        }
+                    }
+                } else {
+                    self.error = Some("Set Linear key first: pit config set linear.api_key <key>".into());
+                }
+                Ok(Action::None)
+            }
+
             // Text input
             (KeyCode::Backspace, _) if self.modal.field.is_text_input() => {
                 if let Some(text) = self.modal.active_text_mut() {
@@ -613,6 +649,105 @@ impl App {
 
             _ => Ok(Action::None),
         }
+    }
+
+    fn handle_picker_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => {
+                self.mode = Mode::NewTask;
+                Ok(Action::None)
+            }
+
+            // Navigate results
+            (KeyCode::Up | KeyCode::Char('k'), _) if !modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.modal.picker_selected > 0 {
+                    self.modal.picker_selected -= 1;
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Down | KeyCode::Char('j'), _) if !modifiers.contains(KeyModifiers::CONTROL) => {
+                if !self.modal.picker_results.is_empty()
+                    && self.modal.picker_selected < self.modal.picker_results.len() - 1
+                {
+                    self.modal.picker_selected += 1;
+                }
+                Ok(Action::None)
+            }
+
+            // Select issue
+            (KeyCode::Enter, _) => {
+                if let Some(issue) = self.modal.picker_results.get(self.modal.picker_selected) {
+                    let issue = issue.clone();
+                    // Fill in the modal fields
+                    self.modal.issue = issue.url.clone();
+                    self.modal.issue_fetched_url = issue.url.clone();
+                    self.modal.issue_status = Some(format!(
+                        "✓ {} · {} [{}]",
+                        issue.identifier, issue.title, issue.state
+                    ));
+
+                    // Auto-fill prompt if empty
+                    if self.modal.prompt.is_empty() {
+                        self.modal.prompt = crate::core::linear::issue_to_prompt(&issue);
+                    }
+
+                    // Auto-fill name if it's still the generated default
+                    let slug: String = issue.identifier.to_lowercase().replace(' ', "-");
+                    if !slug.is_empty() {
+                        self.modal.name = slug;
+                    }
+                }
+                self.mode = Mode::NewTask;
+                Ok(Action::None)
+            }
+
+            // Search: type to filter
+            (KeyCode::Backspace, _) => {
+                self.modal.picker_query.pop();
+                self.picker_search();
+                Ok(Action::None)
+            }
+            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+                self.modal.picker_query.push(c);
+                self.picker_search();
+                Ok(Action::None)
+            }
+
+            _ => Ok(Action::None),
+        }
+    }
+
+    fn picker_search(&mut self) {
+        let query = self.modal.picker_query.trim().to_string();
+        if query.is_empty() {
+            // Reload assigned issues
+            self.modal.picker_status = Some("Loading…".to_string());
+            match crate::core::linear::my_issues(20) {
+                Ok(issues) => {
+                    self.modal.picker_status = Some(format!("{} issue(s)", issues.len()));
+                    self.modal.picker_results = issues;
+                }
+                Err(e) => {
+                    let msg: String = e.to_string().chars().take(60).collect();
+                    self.modal.picker_status = Some(format!("✗ {}", msg));
+                    self.modal.picker_results.clear();
+                }
+            }
+        } else {
+            match crate::core::linear::search_issues(&query, 15) {
+                Ok(issues) => {
+                    self.modal.picker_status =
+                        Some(format!("{} result(s) for '{}'", issues.len(), query));
+                    self.modal.picker_results = issues;
+                }
+                Err(e) => {
+                    let msg: String = e.to_string().chars().take(60).collect();
+                    self.modal.picker_status = Some(format!("✗ {}", msg));
+                    self.modal.picker_results.clear();
+                }
+            }
+        }
+        self.modal.picker_selected = 0;
     }
 
     fn try_submit(&mut self) -> Result<Action> {
@@ -1895,5 +2030,140 @@ mod tests {
         // it should not overwrite existing prompt
         modal.try_fetch_issue();
         assert_eq!(modal.prompt, "my custom prompt");
+    }
+
+    // --- Issue picker tests ---
+
+    #[test]
+    fn ctrl_l_without_key_shows_error() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::NewTask);
+
+        // Remove any linear key
+        std::env::remove_var("LINEAR_API_KEY");
+
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::CONTROL).unwrap();
+        // Should stay in NewTask mode and show error
+        assert_eq!(app.mode, Mode::NewTask);
+        assert!(app.error.is_some());
+        assert!(app.error.as_ref().unwrap().contains("Linear"));
+    }
+
+    #[test]
+    fn picker_esc_returns_to_modal() {
+        let mut app = make_app(vec![]);
+        app.mode = Mode::IssuePicker;
+
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::NewTask);
+    }
+
+    #[test]
+    fn picker_navigation() {
+        let mut app = make_app(vec![]);
+        app.mode = Mode::IssuePicker;
+        app.modal.picker_results = vec![
+            crate::core::linear::LinearIssue {
+                identifier: "A-1".into(),
+                title: "First".into(),
+                description: String::new(),
+                state: "Todo".into(),
+                priority_label: String::new(),
+                url: "https://linear.app/t/issue/A-1".into(),
+            },
+            crate::core::linear::LinearIssue {
+                identifier: "A-2".into(),
+                title: "Second".into(),
+                description: String::new(),
+                state: "Todo".into(),
+                priority_label: String::new(),
+                url: "https://linear.app/t/issue/A-2".into(),
+            },
+        ];
+        app.modal.picker_selected = 0;
+
+        // Down
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.picker_selected, 1);
+
+        // Down at end — stays
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.picker_selected, 1);
+
+        // Up
+        app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.picker_selected, 0);
+
+        // Up at top — stays
+        app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.picker_selected, 0);
+    }
+
+    #[test]
+    fn picker_enter_fills_modal() {
+        let mut app = make_app(vec![]);
+        app.mode = Mode::IssuePicker;
+        app.modal.picker_results = vec![
+            crate::core::linear::LinearIssue {
+                identifier: "ENG-42".into(),
+                title: "Fix login".into(),
+                description: "SSO timeout issue".into(),
+                state: "In Progress".into(),
+                priority_label: "High".into(),
+                url: "https://linear.app/t/issue/ENG-42/fix-login".into(),
+            },
+        ];
+        app.modal.picker_selected = 0;
+        app.modal.prompt = String::new();
+
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+
+        // Should return to modal mode
+        assert_eq!(app.mode, Mode::NewTask);
+        // Issue URL filled
+        assert_eq!(app.modal.issue, "https://linear.app/t/issue/ENG-42/fix-login");
+        // Prompt auto-filled
+        assert!(app.modal.prompt.contains("ENG-42"));
+        assert!(app.modal.prompt.contains("Fix login"));
+        assert!(app.modal.prompt.contains("SSO timeout"));
+        // Name set to identifier slug
+        assert_eq!(app.modal.name, "eng-42");
+        // Issue status set
+        assert!(app.modal.issue_status.as_ref().unwrap().contains("✓"));
+    }
+
+    #[test]
+    fn picker_enter_does_not_overwrite_prompt() {
+        let mut app = make_app(vec![]);
+        app.mode = Mode::IssuePicker;
+        app.modal.prompt = "my existing prompt".to_string();
+        app.modal.picker_results = vec![
+            crate::core::linear::LinearIssue {
+                identifier: "X-1".into(),
+                title: "Thing".into(),
+                description: "Desc".into(),
+                state: "Todo".into(),
+                priority_label: String::new(),
+                url: String::new(),
+            },
+        ];
+        app.modal.picker_selected = 0;
+
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.prompt, "my existing prompt");
+    }
+
+    #[test]
+    fn picker_typing_updates_query() {
+        let mut app = make_app(vec![]);
+        app.mode = Mode::IssuePicker;
+
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('b'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.picker_query, "ab");
+
+        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.picker_query, "a");
     }
 }

@@ -120,6 +120,138 @@ pub fn fetch_issue(identifier: &str) -> Result<LinearIssue> {
     })
 }
 
+/// Search for issues in Linear using a text query.
+/// Returns up to `limit` matching issues, sorted by relevance.
+pub fn search_issues(query: &str, limit: usize) -> Result<Vec<LinearIssue>> {
+    let api_key = super::config::get("linear.api_key")
+        .context("Linear API key not set. Run: pit config set linear.api_key <your-key>")?;
+
+    let gql = serde_json::json!({
+        "query": r#"
+            query($query: String!, $first: Int!) {
+                issueSearch(query: $query, first: $first, orderBy: updatedAt) {
+                    nodes {
+                        identifier
+                        title
+                        description
+                        state { name }
+                        priorityLabel
+                        url
+                    }
+                }
+            }
+        "#,
+        "variables": {
+            "query": query,
+            "first": limit,
+        }
+    });
+
+    let resp = ureq::post("https://api.linear.app/graphql")
+        .set("Authorization", &api_key)
+        .set("Content-Type", "application/json")
+        .send_string(&gql.to_string())
+        .context("failed to call Linear API")?;
+
+    let body: serde_json::Value = resp.into_json().context("failed to parse Linear response")?;
+
+    if let Some(errors) = body.get("errors") {
+        bail!("Linear API error: {}", errors);
+    }
+
+    let nodes = body
+        .pointer("/data/issueSearch/nodes")
+        .and_then(|n| n.as_array())
+        .context("unexpected Linear search response")?;
+
+    let issues = nodes
+        .iter()
+        .map(|node| LinearIssue {
+            identifier: node["identifier"].as_str().unwrap_or("").to_string(),
+            title: node["title"].as_str().unwrap_or("").to_string(),
+            description: node["description"].as_str().unwrap_or("").to_string(),
+            state: node
+                .pointer("/state/name")
+                .and_then(|s| s.as_str())
+                .unwrap_or("Unknown")
+                .to_string(),
+            priority_label: node["priorityLabel"].as_str().unwrap_or("").to_string(),
+            url: node["url"].as_str().unwrap_or("").to_string(),
+        })
+        .collect();
+
+    Ok(issues)
+}
+
+/// Fetch my assigned issues from Linear (current user's active issues).
+pub fn my_issues(limit: usize) -> Result<Vec<LinearIssue>> {
+    let api_key = super::config::get("linear.api_key")
+        .context("Linear API key not set. Run: pit config set linear.api_key <your-key>")?;
+
+    let gql = serde_json::json!({
+        "query": r#"
+            query($first: Int!) {
+                viewer {
+                    assignedIssues(
+                        first: $first,
+                        filter: {
+                            state: { type: { nin: ["completed", "cancelled"] } }
+                        },
+                        orderBy: updatedAt
+                    ) {
+                        nodes {
+                            identifier
+                            title
+                            description
+                            state { name }
+                            priorityLabel
+                            url
+                        }
+                    }
+                }
+            }
+        "#,
+        "variables": {
+            "first": limit,
+        }
+    });
+
+    let resp = ureq::post("https://api.linear.app/graphql")
+        .set("Authorization", &api_key)
+        .set("Content-Type", "application/json")
+        .send_string(&gql.to_string())
+        .context("failed to call Linear API")?;
+
+    let body: serde_json::Value = resp.into_json().context("failed to parse Linear response")?;
+
+    if let Some(errors) = body.get("errors") {
+        bail!("Linear API error: {}", errors);
+    }
+
+    let nodes = body
+        .pointer("/data/viewer/assignedIssues/nodes")
+        .and_then(|n| n.as_array())
+        .context("unexpected Linear response")?;
+
+    let issues = nodes
+        .iter()
+        .map(|node| LinearIssue {
+            identifier: node["identifier"].as_str().unwrap_or("").to_string(),
+            title: node["title"].as_str().unwrap_or("").to_string(),
+            description: node["description"].as_str().unwrap_or("").to_string(),
+            state: node
+                .pointer("/state/name")
+                .and_then(|s| s.as_str())
+                .unwrap_or("Unknown")
+                .to_string(),
+            priority_label: node["priorityLabel"].as_str().unwrap_or("").to_string(),
+            url: node["url"].as_str().unwrap_or("").to_string(),
+        })
+        .collect();
+
+    Ok(issues)
+}
+
 /// Fetch an issue from a Linear URL. Combines parse + fetch.
 pub fn fetch_from_url(url: &str) -> Result<LinearIssue> {
     let identifier = parse_issue_id(url).context("not a valid Linear issue URL")?;

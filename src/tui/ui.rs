@@ -30,6 +30,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_modal(frame, app);
     }
 
+    if app.mode == Mode::IssuePicker {
+        draw_issue_picker(frame, app);
+    }
+
     if let Some(ref err) = app.error {
         draw_error_toast(frame, err);
     }
@@ -548,6 +552,160 @@ fn draw_field_input(frame: &mut Frame, x: u16, y: u16, w: u16, value: &str, acti
 
 // ── Toast / Help ────────────────────────────────────────────────────────────
 
+fn draw_issue_picker(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let picker_width = 72u16.min(area.width.saturating_sub(4));
+    let picker_height = 22u16.min(area.height.saturating_sub(2));
+
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(picker_height)])
+        .flex(Flex::Center)
+        .split(area);
+    let horiz = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(picker_width)])
+        .flex(Flex::Center)
+        .split(vert[0]);
+    let picker_area = horiz[0];
+    frame.render_widget(Clear, picker_area);
+
+    let block = Block::default()
+        .title(" Linear Issues (Ctrl+L) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    frame.render_widget(block, picker_area);
+
+    let inner = Rect {
+        x: picker_area.x + 2,
+        y: picker_area.y + 1,
+        width: picker_area.width.saturating_sub(4),
+        height: picker_area.height.saturating_sub(2),
+    };
+
+    let m = &app.modal;
+    let fw = inner.width;
+    let mut y = inner.y;
+
+    // Search field
+    let search_label = Span::styled(
+        " Search: ",
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    );
+    let search_value = Span::styled(
+        if m.picker_query.is_empty() {
+            "(type to search, empty = my issues)"
+        } else {
+            &m.picker_query
+        },
+        if m.picker_query.is_empty() {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::White)
+        },
+    );
+    let search_line = Paragraph::new(Line::from(vec![search_label, search_value]));
+    frame.render_widget(search_line, Rect { x: inner.x, y, width: fw, height: 1 });
+    // Cursor
+    let cursor_x = inner.x + 9 + m.picker_query.len() as u16;
+    frame.set_cursor_position((cursor_x.min(inner.x + fw - 1), y));
+    y += 1;
+
+    // Status line
+    if let Some(ref status) = m.picker_status {
+        let style = if status.starts_with('✗') {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let status_line = Paragraph::new(Span::styled(format!(" {}", status), style));
+        frame.render_widget(status_line, Rect { x: inner.x, y, width: fw, height: 1 });
+    }
+    y += 1;
+
+    // Separator
+    let sep = "─".repeat(fw as usize);
+    let sep_widget = Paragraph::new(Span::styled(&sep, Style::default().fg(Color::DarkGray)));
+    frame.render_widget(sep_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    y += 1;
+
+    // Issue list
+    let max_items = (inner.height.saturating_sub(4)) as usize;
+    let scroll = if m.picker_selected >= max_items {
+        m.picker_selected - max_items + 1
+    } else {
+        0
+    };
+
+    for (i, issue) in m.picker_results.iter().enumerate().skip(scroll).take(max_items) {
+        if y >= inner.y + inner.height {
+            break;
+        }
+        let is_selected = i == m.picker_selected;
+
+        let marker = if is_selected { "▸ " } else { "  " };
+        let id_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let title_style = if is_selected {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let state_style = Style::default().fg(Color::DarkGray);
+
+        let bg = if is_selected {
+            Style::default().bg(Color::Rgb(40, 40, 50))
+        } else {
+            Style::default()
+        };
+
+        // Truncate title to fit
+        let id_len = issue.identifier.len();
+        let state_len = issue.state.len() + 3; // " [state]"
+        let available = (fw as usize).saturating_sub(id_len + state_len + 4); // marker + spaces
+        let title: String = issue.title.chars().take(available).collect();
+
+        let line = Line::from(vec![
+            Span::styled(marker, bg),
+            Span::styled(&issue.identifier, id_style.patch(bg)),
+            Span::styled(" ", bg),
+            Span::styled(title, title_style.patch(bg)),
+            Span::styled(format!(" [{}]", issue.state), state_style.patch(bg)),
+        ]);
+        let item = Paragraph::new(line);
+        frame.render_widget(item, Rect { x: inner.x, y, width: fw, height: 1 });
+        y += 1;
+    }
+
+    if m.picker_results.is_empty() && m.picker_status.is_none() {
+        let empty = Paragraph::new(Span::styled(
+            "  No issues found",
+            Style::default().fg(Color::DarkGray),
+        ));
+        frame.render_widget(empty, Rect { x: inner.x, y, width: fw, height: 1 });
+    }
+
+    // Help bar at bottom of picker
+    let help_y = picker_area.y + picker_area.height - 2;
+    if help_y > y {
+        let help = Line::from(vec![
+            Span::styled(" ↑/↓", Style::default().fg(Color::Yellow)),
+            Span::raw(":navigate  "),
+            Span::styled("Enter", Style::default().fg(Color::Yellow)),
+            Span::raw(":select  "),
+            Span::styled("Esc", Style::default().fg(Color::Yellow)),
+            Span::raw(":cancel  "),
+            Span::styled("type", Style::default().fg(Color::Yellow)),
+            Span::raw(":search"),
+        ]);
+        let help_widget = Paragraph::new(help)
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(
+            help_widget,
+            Rect { x: inner.x, y: help_y, width: fw, height: 1 },
+        );
+    }
+}
+
 fn draw_error_toast(frame: &mut Frame, msg: &str) {
     let area = frame.area();
     let toast_width = (msg.len() as u16 + 6).min(area.width.saturating_sub(4));
@@ -591,13 +749,32 @@ fn config_indicators() -> Vec<Span<'static>> {
 }
 
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let help = if app.mode == Mode::NewTask {
+    let help = if app.mode == Mode::IssuePicker {
+        Line::from(vec![
+            Span::styled(
+                " ↑/↓",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":navigate  "),
+            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":select  "),
+            Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":back  "),
+            Span::styled("type", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":search"),
+        ])
+    } else if app.mode == Mode::NewTask {
         Line::from(vec![
             Span::styled(
                 " Tab",
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             ),
             Span::raw(":next  "),
+            Span::styled(
+                "Ctrl+L",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":Linear  "),
             Span::styled(
                 "Enter",
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
