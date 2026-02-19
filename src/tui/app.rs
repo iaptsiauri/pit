@@ -1115,6 +1115,8 @@ pub fn build_agent_cmd(task: &Task) -> (String, String) {
             }
         }
         // Default: claude (with session resume support)
+        // Note: `-p` is --print (non-interactive, exits when done).
+        // We pass the prompt as a positional argument to stay interactive.
         _ => {
             let mut c = if is_resume {
                 format!("claude -r {}", session_id)
@@ -1122,7 +1124,7 @@ pub fn build_agent_cmd(task: &Task) -> (String, String) {
                 format!("claude --session-id {}", session_id)
             };
             if !is_resume && !task.prompt.is_empty() {
-                c.push_str(&format!(" -p '{}'", escaped_prompt));
+                c.push_str(&format!(" '{}'", escaped_prompt));
             }
             c
         }
@@ -1651,7 +1653,12 @@ mod tests {
         let (cmd, session_id) = build_agent_cmd(&task);
         assert!(cmd.starts_with("claude --session-id "), "got: {}", cmd);
         assert!(cmd.contains(&session_id));
-        assert!(cmd.contains("-p 'fix bug'"), "got: {}", cmd);
+        assert!(cmd.contains("'fix bug'"), "got: {}", cmd);
+        assert!(
+            !cmd.contains("-p "),
+            "should not use -p (print mode): {}",
+            cmd
+        );
     }
 
     #[test]
@@ -1738,7 +1745,12 @@ mod tests {
         let (cmd, _) = build_agent_cmd(&task);
         // Unknown agents fall through to the claude default
         assert!(cmd.starts_with("claude --session-id "), "got: {}", cmd);
-        assert!(cmd.contains("-p 'do stuff'"), "got: {}", cmd);
+        assert!(cmd.contains("'do stuff'"), "got: {}", cmd);
+        assert!(
+            !cmd.contains("-p "),
+            "should not use -p (print mode): {}",
+            cmd
+        );
     }
 
     #[test]
