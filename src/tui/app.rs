@@ -4,7 +4,9 @@ use ratatui::DefaultTerminal;
 use std::time::Duration;
 
 use crate::core::project::Project;
+use crate::core::reap;
 use crate::core::task::{self, Task};
+use crate::core::tmux;
 
 use super::ui;
 
@@ -49,9 +51,11 @@ impl App {
         })
     }
 
-    /// Refresh tasks from DB (re-opens connection each time for freshness).
+    /// Refresh tasks from DB. Reaps dead tmux sessions first.
     fn refresh(&mut self) -> Result<()> {
         let db = crate::db::open(&self.db_path)?;
+        // Check if any "running" tasks have dead tmux sessions
+        reap::reap_dead(&db)?;
         self.tasks = task::list(&db)?;
         // Keep selection in bounds
         if !self.tasks.is_empty() && self.selected >= self.tasks.len() {
@@ -272,69 +276,49 @@ fn handle_create(app: &mut App, name: &str, description: &str) -> Result<()> {
     }
 }
 
+/// Build the claude command for a task, handling new vs resume sessions.
+fn build_claude_cmd(task: &Task) -> (String, String) {
+    let session_id = task
+        .session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let cmd = if task.session_id.is_some() {
+        format!("claude -r {}", session_id)
+    } else {
+        format!("claude --session-id {}", session_id)
+    };
+
+    (cmd, session_id)
+}
+
+/// Launch a task in a tmux session (shared by enter + background).
+fn launch_task(db: &rusqlite::Connection, task: &Task) -> Result<String> {
+    let tmux_name = tmux::session_name(&task.name);
+
+    if tmux::session_exists(&tmux_name) {
+        return Ok(tmux_name);
+    }
+
+    let (claude_cmd, session_id) = build_claude_cmd(task);
+
+    tmux::create_session(&tmux_name, &task.worktree)?;
+    tmux::send_keys(&tmux_name, &[&claude_cmd, "Enter"])?;
+    task::set_running(db, task.id, &tmux_name, None, Some(&session_id))?;
+
+    Ok(tmux_name)
+}
+
 /// Enter: create tmux session (if needed) and attach.
 fn handle_enter(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
 
-    let tmux_name = format!("pit-{}", task.name);
-
-    // Check if tmux session already exists
-    let session_exists = std::process::Command::new("tmux")
-        .args(["has-session", "-t", &tmux_name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !session_exists {
-        // Create new tmux session
-        let session_id = task
-            .session_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        // Build the claude command
-        let claude_cmd = if task.session_id.is_some() {
-            format!("claude -r {}", session_id)
-        } else {
-            format!("claude --session-id {}", session_id)
-        };
-
-        std::process::Command::new("tmux")
-            .args([
-                "new-session",
-                "-d",
-                "-s",
-                &tmux_name,
-                "-c",
-                &task.worktree,
-            ])
-            .output()?;
-
-        std::process::Command::new("tmux")
-            .args(["send-keys", "-t", &tmux_name, &claude_cmd, "Enter"])
-            .output()?;
-
-        // Store session info
-        task::set_running(&db, task_id, &tmux_name, None, Some(&session_id))?;
-    }
-
-    // Attach to the tmux session
-    std::process::Command::new("tmux")
-        .args(["attach", "-t", &tmux_name])
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()?;
+    let tmux_name = launch_task(&db, &task)?;
+    tmux::attach(&tmux_name)?;
 
     // After detach, check if tmux session is still alive
-    let still_running = std::process::Command::new("tmux")
-        .args(["has-session", "-t", &tmux_name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !still_running {
+    if !tmux::session_exists(&tmux_name) {
         task::set_status(&db, task_id, &task::Status::Done)?;
     }
 
@@ -345,64 +329,21 @@ fn handle_enter(app: &mut App, task_id: i64) -> Result<()> {
 fn handle_background(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
-
-    let tmux_name = format!("pit-{}", task.name);
-
-    // Check if already running
-    let session_exists = std::process::Command::new("tmux")
-        .args(["has-session", "-t", &tmux_name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if session_exists {
-        return Ok(()); // Already running
-    }
-
-    let session_id = task
-        .session_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-    let claude_cmd = if task.session_id.is_some() {
-        format!("claude -r {}", session_id)
-    } else {
-        format!("claude --session-id {}", session_id)
-    };
-
-    std::process::Command::new("tmux")
-        .args([
-            "new-session",
-            "-d",
-            "-s",
-            &tmux_name,
-            "-c",
-            &task.worktree,
-        ])
-        .output()?;
-
-    std::process::Command::new("tmux")
-        .args(["send-keys", "-t", &tmux_name, &claude_cmd, "Enter"])
-        .output()?;
-
-    task::set_running(&db, task_id, &tmux_name, None, Some(&session_id))?;
-
+    launch_task(&db, &task)?;
     Ok(())
 }
 
-/// Delete: confirm and remove task.
+/// Delete: kill tmux session and remove task.
 fn handle_delete(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
 
     // Kill tmux session if running
     if let Some(ref tmux_name) = task.tmux_session {
-        let _ = std::process::Command::new("tmux")
-            .args(["kill-session", "-t", tmux_name])
-            .output();
+        tmux::kill_session(tmux_name)?;
     }
 
-    // If running, stop it first
+    // If running, stop it first so delete doesn't reject
     if task.status == task::Status::Running {
         task::set_status(&db, task_id, &task::Status::Idle)?;
     }
