@@ -275,227 +275,234 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
         lines.push(Line::from(""));
     }
 
-    // ── Git info ──
-    if let Some(ref info) = app.detail {
-        // Commits section
-        let commit_count = info.commits.len();
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("── Commits ({}) ", commit_count),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "─".repeat(w.saturating_sub(16 + digit_count(commit_count))),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
+    // ── Git info (hidden in watch mode) ──
+    if !app.show_live_output {
+        if let Some(ref info) = app.detail {
+            // Commits section
+            let commit_count = info.commits.len();
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("── Commits ({}) ", commit_count),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "─".repeat(w.saturating_sub(16 + digit_count(commit_count))),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
 
-        if info.commits.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  No commits yet",
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else {
-            for c in &info.commits {
-                let hash_span =
-                    Span::styled(format!("  {}", c.hash), Style::default().fg(Color::Yellow));
-                let msg_span =
-                    Span::styled(format!(" {}", c.message), Style::default().fg(Color::White));
-                let age_span =
-                    Span::styled(format!("  {}", c.age), Style::default().fg(Color::DarkGray));
-                lines.push(Line::from(vec![hash_span, msg_span, age_span]));
+            if info.commits.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  No commits yet",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for c in &info.commits {
+                    let hash_span =
+                        Span::styled(format!("  {}", c.hash), Style::default().fg(Color::Yellow));
+                    let msg_span =
+                        Span::styled(format!(" {}", c.message), Style::default().fg(Color::White));
+                    let age_span =
+                        Span::styled(format!("  {}", c.age), Style::default().fg(Color::DarkGray));
+                    lines.push(Line::from(vec![hash_span, msg_span, age_span]));
+                }
             }
-        }
 
-        lines.push(Line::from(""));
+            lines.push(Line::from(""));
 
-        // Checkpoints section
-        if let Some(task) = app.tasks.get(app.selected) {
-            let checkpoints =
-                crate::core::checkpoint::list(&app.repo_root, &task.name).unwrap_or_default();
-            if !checkpoints.is_empty() {
-                let cp_count = checkpoints.len();
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("── Checkpoints ({}) ", cp_count),
-                        Style::default()
-                            .fg(Color::Magenta)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "─".repeat(w.saturating_sub(19 + digit_count(cp_count))),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-                for cp in &checkpoints {
+            // Checkpoints section
+            if let Some(task) = app.tasks.get(app.selected) {
+                let checkpoints =
+                    crate::core::checkpoint::list(&app.repo_root, &task.name).unwrap_or_default();
+                if !checkpoints.is_empty() {
+                    let cp_count = checkpoints.len();
                     lines.push(Line::from(vec![
                         Span::styled(
-                            format!("  #{} ", cp.index),
-                            Style::default().fg(Color::Magenta),
-                        ),
-                        Span::styled(cp.commit_hash.clone(), Style::default().fg(Color::Yellow)),
-                        Span::styled(
-                            format!(" {}", cp.message),
-                            Style::default().fg(Color::White),
+                            format!("── Checkpoints ({}) ", cp_count),
+                            Style::default()
+                                .fg(Color::Magenta)
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            format!("  {}", cp.timestamp),
+                            "─".repeat(w.saturating_sub(19 + digit_count(cp_count))),
                             Style::default().fg(Color::DarkGray),
                         ),
                     ]));
+                    for cp in &checkpoints {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("  #{} ", cp.index),
+                                Style::default().fg(Color::Magenta),
+                            ),
+                            Span::styled(
+                                cp.commit_hash.clone(),
+                                Style::default().fg(Color::Yellow),
+                            ),
+                            Span::styled(
+                                format!(" {}", cp.message),
+                                Style::default().fg(Color::White),
+                            ),
+                            Span::styled(
+                                format!("  {}", cp.timestamp),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ]));
+                    }
+                    lines.push(Line::from(""));
                 }
-                lines.push(Line::from(""));
             }
-        }
 
-        // Files changed section
-        let file_count = info.files.len();
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(
-                    "── Changes ({} file{}) ",
-                    file_count,
-                    if file_count == 1 { "" } else { "s" }
-                ),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "─".repeat(w.saturating_sub(20 + digit_count(file_count))),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-
-        if info.files.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  No changes",
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else {
-            // Find max path length for alignment
-            let max_path = info
-                .files
-                .iter()
-                .map(|f| f.path.len())
-                .max()
-                .unwrap_or(0)
-                .min(w.saturating_sub(20));
-
-            for (idx, f) in info.files.iter().enumerate() {
-                let is_selected = focused && app.file_cursor == Some(idx);
-                let is_expanded = app.expanded_files.contains(&idx);
-
-                let path: String = f.path.chars().take(max_path).collect();
-                let padding = max_path.saturating_sub(path.len()) + 2;
-
-                // Cursor marker and expand indicator
-                let marker = if is_selected { "▸ " } else { "  " };
-                let expand = if is_expanded { "▾ " } else { "▸ " };
-
-                let path_style = if is_selected {
+            // Files changed section
+            let file_count = info.files.len();
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(
+                        "── Changes ({} file{}) ",
+                        file_count,
+                        if file_count == 1 { "" } else { "s" }
+                    ),
                     Style::default()
                         .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-
-                let mut spans = vec![
-                    Span::styled(
-                        marker,
-                        if is_selected {
-                            Style::default().fg(Color::Yellow)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
-                    Span::styled(expand, Style::default().fg(Color::DarkGray)),
-                    Span::styled(path, path_style),
-                    Span::raw(" ".repeat(padding)),
-                ];
-
-                if f.insertions > 0 {
-                    spans.push(Span::styled(
-                        format!("+{}", f.insertions),
-                        Style::default().fg(Color::Green),
-                    ));
-                }
-                if f.insertions > 0 && f.deletions > 0 {
-                    spans.push(Span::raw("  "));
-                }
-                if f.deletions > 0 {
-                    spans.push(Span::styled(
-                        format!("-{}", f.deletions),
-                        Style::default().fg(Color::Red),
-                    ));
-                }
-
-                lines.push(Line::from(spans));
-
-                // Render expanded diff lines
-                if is_expanded {
-                    let is_cursor_file = focused && app.file_cursor == Some(idx);
-                    if let Some(diff_lines) = app.file_diffs.get(&idx) {
-                        if diff_lines.is_empty() {
-                            lines.push(Line::from(Span::styled(
-                                "      (no diff content)",
-                                Style::default().fg(Color::DarkGray),
-                            )));
-                        } else {
-                            for (di, dl) in diff_lines.iter().enumerate() {
-                                let is_active_line = is_cursor_file && app.diff_line == Some(di);
-                                let base_style = if dl.starts_with('+') {
-                                    Style::default().fg(Color::Green)
-                                } else if dl.starts_with('-') {
-                                    Style::default().fg(Color::Red)
-                                } else if dl.starts_with("@@") {
-                                    Style::default().fg(Color::Cyan)
-                                } else {
-                                    Style::default().fg(Color::DarkGray)
-                                };
-                                let style = if is_active_line {
-                                    base_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD)
-                                } else {
-                                    base_style
-                                };
-                                let line_marker = if is_active_line { "  ▸ " } else { "    " };
-                                let display: String =
-                                    dl.chars().take(w.saturating_sub(6)).collect();
-                                lines.push(Line::from(Span::styled(
-                                    format!("{}{}", line_marker, display),
-                                    style,
-                                )));
-                            }
-                        }
-                        lines.push(Line::from("")); // blank after diff
-                    }
-                }
-            }
-
-            // Total line
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  total: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("+{}", info.total_insertions),
-                    Style::default().fg(Color::Green),
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw("  "),
                 Span::styled(
-                    format!("-{}", info.total_deletions),
-                    Style::default().fg(Color::Red),
+                    "─".repeat(w.saturating_sub(20 + digit_count(file_count))),
+                    Style::default().fg(Color::DarkGray),
                 ),
             ]));
+
+            if info.files.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  No changes",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                // Find max path length for alignment
+                let max_path = info
+                    .files
+                    .iter()
+                    .map(|f| f.path.len())
+                    .max()
+                    .unwrap_or(0)
+                    .min(w.saturating_sub(20));
+
+                for (idx, f) in info.files.iter().enumerate() {
+                    let is_selected = focused && app.file_cursor == Some(idx);
+                    let is_expanded = app.expanded_files.contains(&idx);
+
+                    let path: String = f.path.chars().take(max_path).collect();
+                    let padding = max_path.saturating_sub(path.len()) + 2;
+
+                    // Cursor marker and expand indicator
+                    let marker = if is_selected { "▸ " } else { "  " };
+                    let expand = if is_expanded { "▾ " } else { "▸ " };
+
+                    let path_style = if is_selected {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+
+                    let mut spans = vec![
+                        Span::styled(
+                            marker,
+                            if is_selected {
+                                Style::default().fg(Color::Yellow)
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
+                        ),
+                        Span::styled(expand, Style::default().fg(Color::DarkGray)),
+                        Span::styled(path, path_style),
+                        Span::raw(" ".repeat(padding)),
+                    ];
+
+                    if f.insertions > 0 {
+                        spans.push(Span::styled(
+                            format!("+{}", f.insertions),
+                            Style::default().fg(Color::Green),
+                        ));
+                    }
+                    if f.insertions > 0 && f.deletions > 0 {
+                        spans.push(Span::raw("  "));
+                    }
+                    if f.deletions > 0 {
+                        spans.push(Span::styled(
+                            format!("-{}", f.deletions),
+                            Style::default().fg(Color::Red),
+                        ));
+                    }
+
+                    lines.push(Line::from(spans));
+
+                    // Render expanded diff lines
+                    if is_expanded {
+                        let is_cursor_file = focused && app.file_cursor == Some(idx);
+                        if let Some(diff_lines) = app.file_diffs.get(&idx) {
+                            if diff_lines.is_empty() {
+                                lines.push(Line::from(Span::styled(
+                                    "      (no diff content)",
+                                    Style::default().fg(Color::DarkGray),
+                                )));
+                            } else {
+                                for (di, dl) in diff_lines.iter().enumerate() {
+                                    let is_active_line =
+                                        is_cursor_file && app.diff_line == Some(di);
+                                    let base_style = if dl.starts_with('+') {
+                                        Style::default().fg(Color::Green)
+                                    } else if dl.starts_with('-') {
+                                        Style::default().fg(Color::Red)
+                                    } else if dl.starts_with("@@") {
+                                        Style::default().fg(Color::Cyan)
+                                    } else {
+                                        Style::default().fg(Color::DarkGray)
+                                    };
+                                    let style = if is_active_line {
+                                        base_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                                    } else {
+                                        base_style
+                                    };
+                                    let line_marker =
+                                        if is_active_line { "  ▸ " } else { "    " };
+                                    let display: String =
+                                        dl.chars().take(w.saturating_sub(6)).collect();
+                                    lines.push(Line::from(Span::styled(
+                                        format!("{}{}", line_marker, display),
+                                        style,
+                                    )));
+                                }
+                            }
+                            lines.push(Line::from("")); // blank after diff
+                        }
+                    }
+                }
+
+                // Total line
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("  total: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("+{}", info.total_insertions),
+                        Style::default().fg(Color::Green),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("-{}", info.total_deletions),
+                        Style::default().fg(Color::Red),
+                    ),
+                ]));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  Loading git info…",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
-    } else {
-        lines.push(Line::from(Span::styled(
-            "  Loading git info…",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
+    } // end !show_live_output
 
     // Manually scroll by skipping lines (no Wrap — each Line = one visual row).
     // This keeps cursor_visual_line() math in sync with what's rendered.
