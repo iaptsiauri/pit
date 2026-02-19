@@ -36,6 +36,9 @@ enum Commands {
         /// Link to an issue (GitHub, Linear, etc.)
         #[arg(short, long, default_value = "")]
         issue: String,
+        /// Agent to use (claude, codex, amp, aider, custom)
+        #[arg(short, long, default_value = "claude")]
+        agent: String,
     },
 
     /// List all tasks
@@ -82,7 +85,8 @@ fn main() -> Result<()> {
             description,
             prompt,
             issue,
-        }) => cmd_new(&name, &description, &prompt, &issue)?,
+            agent,
+        }) => cmd_new(&name, &description, &prompt, &issue, &agent)?,
         Some(Commands::List) => cmd_list()?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Run { name }) => cmd_run(&name)?,
@@ -107,7 +111,7 @@ fn cmd_init() -> Result<()> {
     Ok(())
 }
 
-fn cmd_new(name: &str, description: &str, prompt: &str, issue: &str) -> Result<()> {
+fn cmd_new(name: &str, description: &str, prompt: &str, issue: &str, agent: &str) -> Result<()> {
     let project = open_project()?;
     let t = task::create(
         &project.db,
@@ -117,9 +121,10 @@ fn cmd_new(name: &str, description: &str, prompt: &str, issue: &str) -> Result<(
             description,
             prompt,
             issue_url: issue,
+            agent,
         },
     )?;
-    println!("Created task '{}' on branch '{}'", t.name, t.branch);
+    println!("Created task '{}' on branch '{}' (agent: {})", t.name, t.branch, t.agent);
     println!("  worktree: {}", t.worktree);
     if !t.prompt.is_empty() {
         println!("  prompt: {}", t.prompt);
@@ -188,28 +193,13 @@ fn cmd_run(name: &str) -> Result<()> {
         return Ok(());
     }
 
-    let session_id = t
-        .session_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-    let mut claude_cmd = if t.session_id.is_some() {
-        format!("claude -r {}", session_id)
-    } else {
-        format!("claude --session-id {}", session_id)
-    };
-
-    // Pass prompt on first launch
-    if t.session_id.is_none() && !t.prompt.is_empty() {
-        let escaped = t.prompt.replace('\'', "'\\''");
-        claude_cmd.push_str(&format!(" -p '{}'", escaped));
-    }
+    let (agent_cmd, session_id) = tui::build_agent_cmd(&t);
 
     tmux::create_session(&tmux_name, &t.worktree)?;
-    tmux::send_keys(&tmux_name, &[&claude_cmd, "Enter"])?;
+    tmux::send_keys(&tmux_name, &[&agent_cmd, "Enter"])?;
     task::set_running(&project.db, t.id, &tmux_name, None, Some(&session_id))?;
 
-    println!("Started task '{}' in background (tmux: {})", name, tmux_name);
+    println!("Started task '{}' ({}) in background (tmux: {})", name, t.agent, tmux_name);
     println!("  Attach with: tmux -L pit attach -t {}", tmux_name);
     println!("  Detach with: F1");
     Ok(())

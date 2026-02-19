@@ -283,12 +283,14 @@ impl App {
 
         let prompt = self.modal.prompt.trim().to_string();
         let issue_url = self.modal.issue.trim().to_string();
+        let agent = self.modal.agent.clone();
 
         self.mode = Mode::Normal;
         Ok(Action::CreateTask {
             name,
             prompt,
             issue_url,
+            agent,
         })
     }
 }
@@ -303,6 +305,7 @@ pub enum Action {
         name: String,
         prompt: String,
         issue_url: String,
+        agent: String,
     },
 }
 
@@ -348,8 +351,9 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                         name,
                         prompt,
                         issue_url,
+                        agent,
                     } => {
-                        handle_create(app, &name, &prompt, &issue_url)?;
+                        handle_create(app, &name, &prompt, &issue_url, &agent)?;
                         app.refresh()?;
                         if !app.tasks.is_empty() {
                             app.selected = app.tasks.len() - 1;
@@ -369,7 +373,7 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 
 // --- Handlers ---
 
-fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str) -> Result<()> {
+fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str, agent: &str) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     match task::create(
         &db,
@@ -379,6 +383,7 @@ fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str) -> Re
             description: "",
             prompt,
             issue_url,
+            agent,
         },
     ) {
         Ok(_) => Ok(()),
@@ -389,22 +394,63 @@ fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str) -> Re
     }
 }
 
-fn build_claude_cmd(task: &Task) -> (String, String) {
+/// Build the shell command to launch an agent for a task.
+/// Returns (command, session_id).
+pub fn build_agent_cmd(task: &Task) -> (String, String) {
     let session_id = task
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let mut cmd = if task.session_id.is_some() {
-        format!("claude -r {}", session_id)
-    } else {
-        format!("claude --session-id {}", session_id)
-    };
+    let is_resume = task.session_id.is_some();
+    let escaped_prompt = task.prompt.replace('\'', "'\\''");
 
-    if task.session_id.is_none() && !task.prompt.is_empty() {
-        let escaped = task.prompt.replace('\'', "'\\''");
-        cmd.push_str(&format!(" -p '{}'", escaped));
-    }
+    let cmd = match task.agent.as_str() {
+        "codex" => {
+            // OpenAI Codex CLI: no session resume, prompt is positional
+            if !task.prompt.is_empty() {
+                format!("codex '{}'", escaped_prompt)
+            } else {
+                "codex".to_string()
+            }
+        }
+        "aider" => {
+            // Aider: message via --message flag
+            if !task.prompt.is_empty() {
+                format!("aider --message '{}'", escaped_prompt)
+            } else {
+                "aider".to_string()
+            }
+        }
+        "amp" => {
+            // Amp: prompt via --prompt flag
+            if !task.prompt.is_empty() {
+                format!("amp --prompt '{}'", escaped_prompt)
+            } else {
+                "amp".to_string()
+            }
+        }
+        "custom" => {
+            // Custom: just send the prompt as a bare command, user configures their shell
+            if !task.prompt.is_empty() {
+                format!("'{}'", escaped_prompt)
+            } else {
+                "echo 'No agent configured. Type your command.'".to_string()
+            }
+        }
+        // Default: claude (with session resume support)
+        _ => {
+            let mut c = if is_resume {
+                format!("claude -r {}", session_id)
+            } else {
+                format!("claude --session-id {}", session_id)
+            };
+            if !is_resume && !task.prompt.is_empty() {
+                c.push_str(&format!(" -p '{}'", escaped_prompt));
+            }
+            c
+        }
+    };
 
     (cmd, session_id)
 }
@@ -416,10 +462,10 @@ fn launch_task(db: &rusqlite::Connection, task: &Task) -> Result<String> {
         return Ok(tmux_name);
     }
 
-    let (claude_cmd, session_id) = build_claude_cmd(task);
+    let (agent_cmd, session_id) = build_agent_cmd(task);
 
     tmux::create_session(&tmux_name, &task.worktree)?;
-    tmux::send_keys(&tmux_name, &[&claude_cmd, "Enter"])?;
+    tmux::send_keys(&tmux_name, &[&agent_cmd, "Enter"])?;
     task::set_running(db, task.id, &tmux_name, None, Some(&session_id))?;
 
     Ok(tmux_name)
@@ -487,6 +533,7 @@ mod tests {
             description: String::new(),
             prompt: String::new(),
             issue_url: String::new(),
+            agent: "claude".to_string(),
             branch: format!("pit/{}", name),
             worktree: format!("/tmp/wt/{}", name),
             status,
@@ -771,5 +818,155 @@ mod tests {
             app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
         }
         assert_eq!(app.modal.issue, "https://github.com/org/repo/issues/42");
+    }
+
+    #[test]
+    fn modal_submit_includes_agent() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        // Cycle to codex
+        app.modal.field = ModalField::Agent;
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.agent, "codex");
+
+        // Submit
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(
+            action,
+            Action::CreateTask { ref agent, .. } if agent == "codex"
+        ));
+    }
+
+    #[test]
+    fn modal_submit_default_agent_is_claude() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(
+            action,
+            Action::CreateTask { ref agent, .. } if agent == "claude"
+        ));
+    }
+
+    // --- build_agent_cmd ---
+
+    fn make_task_with_agent(agent: &str, prompt: &str, session_id: Option<&str>) -> Task {
+        Task {
+            id: 1,
+            name: "test".to_string(),
+            description: String::new(),
+            prompt: prompt.to_string(),
+            issue_url: String::new(),
+            agent: agent.to_string(),
+            branch: "pit/test".to_string(),
+            worktree: "/tmp/wt/test".to_string(),
+            status: task::Status::Idle,
+            session_id: session_id.map(|s| s.to_string()),
+            tmux_session: None,
+            pid: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn agent_cmd_claude_new_session() {
+        let task = make_task_with_agent("claude", "fix bug", None);
+        let (cmd, session_id) = build_agent_cmd(&task);
+        assert!(cmd.starts_with("claude --session-id "), "got: {}", cmd);
+        assert!(cmd.contains(&session_id));
+        assert!(cmd.contains("-p 'fix bug'"), "got: {}", cmd);
+    }
+
+    #[test]
+    fn agent_cmd_claude_resume_session() {
+        let task = make_task_with_agent("claude", "fix bug", Some("sess-123"));
+        let (cmd, session_id) = build_agent_cmd(&task);
+        assert_eq!(session_id, "sess-123");
+        assert_eq!(cmd, "claude -r sess-123");
+        // Resume should NOT include the prompt
+        assert!(!cmd.contains("-p"), "resume should not include prompt, got: {}", cmd);
+    }
+
+    #[test]
+    fn agent_cmd_claude_no_prompt() {
+        let task = make_task_with_agent("claude", "", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert!(cmd.starts_with("claude --session-id "));
+        assert!(!cmd.contains("-p"), "got: {}", cmd);
+    }
+
+    #[test]
+    fn agent_cmd_codex_with_prompt() {
+        let task = make_task_with_agent("codex", "refactor API", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "codex 'refactor API'");
+    }
+
+    #[test]
+    fn agent_cmd_codex_no_prompt() {
+        let task = make_task_with_agent("codex", "", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "codex");
+    }
+
+    #[test]
+    fn agent_cmd_aider_with_prompt() {
+        let task = make_task_with_agent("aider", "add tests", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "aider --message 'add tests'");
+    }
+
+    #[test]
+    fn agent_cmd_aider_no_prompt() {
+        let task = make_task_with_agent("aider", "", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "aider");
+    }
+
+    #[test]
+    fn agent_cmd_amp_with_prompt() {
+        let task = make_task_with_agent("amp", "fix login", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "amp --prompt 'fix login'");
+    }
+
+    #[test]
+    fn agent_cmd_amp_no_prompt() {
+        let task = make_task_with_agent("amp", "", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "amp");
+    }
+
+    #[test]
+    fn agent_cmd_custom_with_prompt() {
+        let task = make_task_with_agent("custom", "my-script --flag", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert_eq!(cmd, "'my-script --flag'");
+    }
+
+    #[test]
+    fn agent_cmd_custom_no_prompt() {
+        let task = make_task_with_agent("custom", "", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert!(cmd.contains("No agent configured"), "got: {}", cmd);
+    }
+
+    #[test]
+    fn agent_cmd_unknown_falls_back_to_claude() {
+        let task = make_task_with_agent("mystery-agent", "do stuff", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        // Unknown agents fall through to the claude default
+        assert!(cmd.starts_with("claude --session-id "), "got: {}", cmd);
+        assert!(cmd.contains("-p 'do stuff'"), "got: {}", cmd);
+    }
+
+    #[test]
+    fn agent_cmd_escapes_single_quotes() {
+        let task = make_task_with_agent("codex", "fix the user's login", None);
+        let (cmd, _) = build_agent_cmd(&task);
+        assert!(cmd.contains("'fix the user'\\''s login'"), "got: {}", cmd);
     }
 }

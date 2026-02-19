@@ -118,10 +118,32 @@ fn new_creates_task() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Created task 'fix-bug'"))
-        .stdout(predicate::str::contains("pit/fix-bug"));
+        .stdout(predicate::str::contains("pit/fix-bug"))
+        .stdout(predicate::str::contains("agent: claude"));
 
     // Worktree should exist
     assert!(repo.path().join(".pit/worktrees/fix-bug").exists());
+}
+
+#[test]
+fn new_with_agent_flag() {
+    let repo = make_git_repo();
+
+    Command::cargo_bin("pit")
+        .unwrap()
+        .arg("init")
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["new", "codex-task", "-a", "codex", "-p", "refactor API"])
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agent: codex"))
+        .stdout(predicate::str::contains("prompt: refactor API"));
 }
 
 #[test]

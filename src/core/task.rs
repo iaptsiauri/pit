@@ -42,6 +42,7 @@ pub struct Task {
     pub description: String,
     pub prompt: String,
     pub issue_url: String,
+    pub agent: String,
     pub branch: String,
     pub worktree: String,
     pub status: Status,
@@ -59,6 +60,7 @@ pub struct CreateOpts<'a> {
     pub description: &'a str,
     pub prompt: &'a str,
     pub issue_url: &'a str,
+    pub agent: &'a str,
 }
 
 /// Create a new task: git branch + worktree + DB row.
@@ -122,11 +124,13 @@ pub fn create(
         bail!("git worktree add failed: {}", stderr.trim());
     }
 
+    let agent = if opts.agent.is_empty() { "claude" } else { opts.agent };
+
     // Insert into database
     db.execute(
-        "INSERT INTO tasks (name, description, prompt, issue_url, branch, worktree)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![name, description, opts.prompt, opts.issue_url, branch, worktree_str],
+        "INSERT INTO tasks (name, description, prompt, issue_url, agent, branch, worktree)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![name, description, opts.prompt, opts.issue_url, agent, branch, worktree_str],
     )
     .with_context(|| format!("failed to insert task '{}'", name))?;
 
@@ -137,7 +141,7 @@ pub fn create(
 /// List all tasks, ordered by creation time.
 pub fn list(db: &Connection) -> Result<Vec<Task>> {
     let mut stmt = db.prepare(
-        "SELECT id, name, description, prompt, issue_url, branch, worktree, status,
+        "SELECT id, name, description, prompt, issue_url, agent, branch, worktree, status,
                 session_id, tmux_session, pid, created_at, updated_at
          FROM tasks ORDER BY created_at ASC",
     )?;
@@ -152,7 +156,7 @@ pub fn list(db: &Connection) -> Result<Vec<Task>> {
 /// Get a task by ID.
 pub fn get(db: &Connection, id: i64) -> Result<Option<Task>> {
     let mut stmt = db.prepare(
-        "SELECT id, name, description, prompt, issue_url, branch, worktree, status,
+        "SELECT id, name, description, prompt, issue_url, agent, branch, worktree, status,
                 session_id, tmux_session, pid, created_at, updated_at
          FROM tasks WHERE id = ?1",
     )?;
@@ -164,7 +168,7 @@ pub fn get(db: &Connection, id: i64) -> Result<Option<Task>> {
 /// Get a task by name.
 pub fn get_by_name(db: &Connection, name: &str) -> Result<Option<Task>> {
     let mut stmt = db.prepare(
-        "SELECT id, name, description, prompt, issue_url, branch, worktree, status,
+        "SELECT id, name, description, prompt, issue_url, agent, branch, worktree, status,
                 session_id, tmux_session, pid, created_at, updated_at
          FROM tasks WHERE name = ?1",
     )?;
@@ -232,10 +236,10 @@ pub fn set_running(
 use rusqlite::OptionalExtension;
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
-    let status_str: String = row.get(7)?;
+    let status_str: String = row.get(8)?;
     let status = Status::from_str(&status_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
-            7,
+            8,
             rusqlite::types::Type::Text,
             Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
         )
@@ -247,14 +251,15 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         description: row.get(2)?,
         prompt: row.get(3)?,
         issue_url: row.get(4)?,
-        branch: row.get(5)?,
-        worktree: row.get(6)?,
+        agent: row.get(5)?,
+        branch: row.get(6)?,
+        worktree: row.get(7)?,
         status,
-        session_id: row.get(8)?,
-        tmux_session: row.get(9)?,
-        pid: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        session_id: row.get(9)?,
+        tmux_session: row.get(10)?,
+        pid: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -311,12 +316,14 @@ mod tests {
             description: "Fix the login bug",
             prompt: "find and fix the login timeout",
             issue_url: "https://linear.app/123",
+            agent: "claude",
         }).unwrap();
 
         assert_eq!(task.name, "fix-bug");
         assert_eq!(task.description, "Fix the login bug");
         assert_eq!(task.prompt, "find and fix the login timeout");
         assert_eq!(task.issue_url, "https://linear.app/123");
+        assert_eq!(task.agent, "claude");
         assert_eq!(task.branch, "pit/fix-bug");
         assert_eq!(task.status, Status::Idle);
         assert!(task.worktree.contains("fix-bug"));
@@ -328,6 +335,50 @@ mod tests {
             .output()
             .unwrap();
         assert!(String::from_utf8_lossy(&output.stdout).contains("pit/fix-bug"));
+    }
+
+    #[test]
+    fn create_with_agent() {
+        let (repo, db) = setup();
+        let task = create(&db, repo.path(), &CreateOpts {
+            name: "codex-task",
+            description: "",
+            prompt: "",
+            issue_url: "",
+            agent: "codex",
+        }).unwrap();
+        assert_eq!(task.agent, "codex");
+
+        // Re-read from DB to confirm persistence
+        let t = get(&db, task.id).unwrap().unwrap();
+        assert_eq!(t.agent, "codex");
+    }
+
+    #[test]
+    fn create_empty_agent_defaults_to_claude() {
+        let (repo, db) = setup();
+        let task = create(&db, repo.path(), &CreateOpts {
+            name: "default-agent",
+            description: "",
+            prompt: "",
+            issue_url: "",
+            agent: "",
+        }).unwrap();
+        assert_eq!(task.agent, "claude");
+    }
+
+    #[test]
+    fn create_with_custom_agent() {
+        let (repo, db) = setup();
+        let task = create(&db, repo.path(), &CreateOpts {
+            name: "amp-task",
+            description: "",
+            prompt: "do the thing",
+            issue_url: "",
+            agent: "amp",
+        }).unwrap();
+        assert_eq!(task.agent, "amp");
+        assert_eq!(task.prompt, "do the thing");
     }
 
     #[test]

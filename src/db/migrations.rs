@@ -6,6 +6,7 @@ use rusqlite::Connection;
 const MIGRATIONS: &[(i64, &str, &str)] = &[
     (1, "initial schema", MIGRATION_001),
     (2, "add prompt and issue_url", MIGRATION_002),
+    (3, "add agent column", MIGRATION_003),
 ];
 
 const MIGRATION_001: &str = "
@@ -28,6 +29,10 @@ CREATE TABLE tasks (
 const MIGRATION_002: &str = "
 ALTER TABLE tasks ADD COLUMN prompt TEXT NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN issue_url TEXT NOT NULL DEFAULT '';
+";
+
+const MIGRATION_003: &str = "
+ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
 ";
 
 /// Run all pending migrations inside a transaction.
@@ -77,7 +82,7 @@ mod tests {
         let version: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
