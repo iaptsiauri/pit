@@ -362,6 +362,13 @@ impl App {
                     Ok(Action::None)
                 }
             }
+            (KeyCode::Char('t'), _) => {
+                if let Some(t) = self.tasks.get(self.selected) {
+                    Ok(Action::Shell(t.id))
+                } else {
+                    Ok(Action::None)
+                }
+            }
             _ => Ok(Action::None),
         }
     }
@@ -782,6 +789,7 @@ pub enum Action {
     Enter(i64),
     Background(i64),
     Delete(i64),
+    Shell(i64),
     CreateTask {
         name: String,
         prompt: String,
@@ -826,6 +834,12 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                     }
                     Action::Delete(task_id) => {
                         handle_delete(app, task_id)?;
+                        app.refresh()?;
+                    }
+                    Action::Shell(task_id) => {
+                        ratatui::restore();
+                        handle_shell(app, task_id)?;
+                        *terminal = ratatui::init();
                         app.refresh()?;
                     }
                     Action::CreateTask {
@@ -971,6 +985,22 @@ fn handle_background(app: &mut App, task_id: i64) -> Result<()> {
     Ok(())
 }
 
+fn handle_shell(app: &mut App, task_id: i64) -> Result<()> {
+    let db = crate::db::open(&app.db_path)?;
+    let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
+
+    let tmux_name = format!("pit-shell-{}", task.name);
+
+    if !tmux::session_exists(&tmux_name) {
+        // Launch a plain shell in the task's worktree
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        tmux::create_session_with_cmd(&tmux_name, &task.worktree, &shell)?;
+    }
+
+    tmux::attach(&tmux_name)?;
+    Ok(())
+}
+
 fn handle_delete(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
@@ -1109,6 +1139,20 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         let action = app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE).unwrap();
         assert!(matches!(action, Action::Delete(1)));
+    }
+
+    #[test]
+    fn shell_returns_task_id() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        let action = app.handle_key(KeyCode::Char('t'), KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::Shell(1)));
+    }
+
+    #[test]
+    fn shell_on_empty_list_is_noop() {
+        let mut app = make_app(vec![]);
+        let action = app.handle_key(KeyCode::Char('t'), KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::None));
     }
 
     // --- Modal ---

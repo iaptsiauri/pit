@@ -66,6 +66,13 @@ enum Commands {
         name: String,
     },
 
+    /// Open a shell in a task's worktree
+    #[command(alias = "sh")]
+    Shell {
+        /// Task name
+        name: String,
+    },
+
     /// Delete a task (removes worktree and branch)
     #[command(alias = "rm")]
     Delete {
@@ -124,6 +131,7 @@ fn main() -> Result<()> {
         Some(Commands::Run { name }) => cmd_run(&name)?,
         Some(Commands::Stop { name }) => cmd_stop(&name)?,
         Some(Commands::Diff { name }) => cmd_diff(&name)?,
+        Some(Commands::Shell { name }) => cmd_shell(&name)?,
         Some(Commands::Delete { name }) => cmd_delete(&name)?,
         Some(Commands::Config { action }) => cmd_config(action)?,
     }
@@ -234,6 +242,22 @@ fn cmd_run(name: &str) -> Result<()> {
     println!("Started task '{}' ({}) in background (tmux: {})", name, t.agent, tmux_name);
     println!("  Attach with: tmux -L pit attach -t {}", tmux_name);
     println!("  Detach with: F1");
+    Ok(())
+}
+
+fn cmd_shell(name: &str) -> Result<()> {
+    let project = open_project()?;
+    let t = task::get_by_name(&project.db, name)?
+        .ok_or_else(|| anyhow::anyhow!("task '{}' not found", name))?;
+
+    let tmux_name = format!("pit-shell-{}", t.name);
+
+    if !tmux::session_exists(&tmux_name) {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        tmux::create_session_with_cmd(&tmux_name, &t.worktree, &shell)?;
+    }
+
+    tmux::attach(&tmux_name)?;
     Ok(())
 }
 

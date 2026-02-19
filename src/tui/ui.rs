@@ -818,6 +818,8 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(":open  "),
             Span::styled("l/→", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":detail  "),
+            Span::styled("t", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":shell  "),
             Span::styled("b", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":bg  "),
             Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
