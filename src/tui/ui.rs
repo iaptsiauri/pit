@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::core::task::Status;
 
-use super::app::{App, ModalField, Mode};
+use super::app::{App, ModalField, Mode, Pane};
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -20,8 +20,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(chunks[0]);
 
-    draw_task_list(frame, app, panes[0]);
-    draw_detail_pane(frame, app, panes[1]);
+    let list_focused = app.focus == Pane::TaskList && app.mode == Mode::Normal;
+    let detail_focused = app.focus == Pane::Detail && app.mode == Mode::Normal;
+    draw_task_list(frame, app, panes[0], list_focused);
+    draw_detail_pane(frame, app, panes[1], detail_focused);
     draw_help_bar(frame, app, chunks[1]);
 
     if app.mode == Mode::NewTask {
@@ -35,14 +37,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
 // ── Task list (left pane) ───────────────────────────────────────────────────
 
-fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_task_list(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+
     if app.tasks.is_empty() {
         let msg = Paragraph::new("  No tasks yet.\n  Press n to create.")
             .block(
                 Block::default()
                     .title(" Tasks ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(Style::default().fg(border_color)),
             )
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(msg, area);
@@ -72,7 +76,7 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(" Tasks ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().fg(border_color)),
         )
         .highlight_style(
             Style::default()
@@ -88,11 +92,12 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect) {
 
 // ── Detail pane (right side) ────────────────────────────────────────────────
 
-fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
         .title(" Detail ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(border_color));
 
     let task = match app.tasks.get(app.selected) {
         Some(t) => t,
@@ -506,6 +511,24 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw(":cancel"),
         ])
+    } else if app.focus == Pane::Detail {
+        Line::from(vec![
+            Span::styled(
+                " j/k",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":scroll  "),
+            Span::styled("g/G", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":top/bottom  "),
+            Span::styled("h/←", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":back  "),
+            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":open  "),
+            Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":new  "),
+            Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":quit"),
+        ])
     } else {
         Line::from(vec![
             Span::styled(
@@ -513,6 +536,8 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             ),
             Span::raw(":open  "),
+            Span::styled("l/→", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":detail  "),
             Span::styled("b", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":bg  "),
             Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),

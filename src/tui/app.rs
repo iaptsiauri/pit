@@ -18,6 +18,13 @@ pub enum Mode {
     NewTask,
 }
 
+/// Which pane has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    TaskList,
+    Detail,
+}
+
 /// Which field is focused in the new-task modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalField {
@@ -111,6 +118,7 @@ pub struct App {
     pub selected: usize,
     pub should_quit: bool,
     pub mode: Mode,
+    pub focus: Pane,
     pub modal: ModalState,
     pub error: Option<String>,
     pub repo_root: std::path::PathBuf,
@@ -132,6 +140,7 @@ impl App {
             selected: 0,
             should_quit: false,
             mode: Mode::Normal,
+            focus: Pane::TaskList,
             modal: ModalState::new(&existing),
             error: None,
             repo_root: project.repo_root.clone(),
@@ -187,11 +196,52 @@ impl App {
     }
 
     fn handle_normal_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        // Global keys (work in both panes)
         match (code, modifiers) {
             (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.should_quit = true;
-                Ok(Action::None)
+                return Ok(Action::None);
             }
+            (KeyCode::Char('n'), _) => {
+                let existing: Vec<String> = self.tasks.iter().map(|t| t.name.clone()).collect();
+                self.modal = ModalState::new(&existing);
+                self.mode = Mode::NewTask;
+                return Ok(Action::None);
+            }
+            (KeyCode::Char('r'), _) => {
+                self.refresh()?;
+                self.force_refresh_detail();
+                return Ok(Action::None);
+            }
+            _ => {}
+        }
+
+        // Pane switching
+        match (code, modifiers) {
+            (KeyCode::Right | KeyCode::Char('l'), _) if self.focus == Pane::TaskList => {
+                self.focus = Pane::Detail;
+                return Ok(Action::None);
+            }
+            (KeyCode::Left | KeyCode::Char('h'), _) if self.focus == Pane::Detail => {
+                self.focus = Pane::TaskList;
+                return Ok(Action::None);
+            }
+            (KeyCode::Esc, _) if self.focus == Pane::Detail => {
+                self.focus = Pane::TaskList;
+                return Ok(Action::None);
+            }
+            _ => {}
+        }
+
+        // Pane-specific keys
+        match self.focus {
+            Pane::TaskList => self.handle_tasklist_key(code, modifiers),
+            Pane::Detail => self.handle_detail_key(code, modifiers),
+        }
+    }
+
+    fn handle_tasklist_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        match (code, modifiers) {
             (KeyCode::Up | KeyCode::Char('k'), _) => {
                 if self.selected > 0 {
                     self.selected -= 1;
@@ -227,16 +277,59 @@ impl App {
                     Ok(Action::None)
                 }
             }
-            (KeyCode::Char('n'), _) => {
-                let existing: Vec<String> = self.tasks.iter().map(|t| t.name.clone()).collect();
-                self.modal = ModalState::new(&existing);
-                self.mode = Mode::NewTask;
+            _ => Ok(Action::None),
+        }
+    }
+
+    fn handle_detail_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        match (code, modifiers) {
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(1);
                 Ok(Action::None)
             }
-            (KeyCode::Char('r'), _) => {
-                self.refresh()?;
-                self.force_refresh_detail();
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
+                self.detail_scroll = self.detail_scroll.saturating_add(1);
                 Ok(Action::None)
+            }
+            // Page up/down for faster scrolling
+            (KeyCode::PageUp, _) => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(10);
+                Ok(Action::None)
+            }
+            (KeyCode::PageDown, _) => {
+                self.detail_scroll = self.detail_scroll.saturating_add(10);
+                Ok(Action::None)
+            }
+            // Home/End
+            (KeyCode::Home, _) | (KeyCode::Char('g'), _) => {
+                self.detail_scroll = 0;
+                Ok(Action::None)
+            }
+            (KeyCode::End, _) | (KeyCode::Char('G'), _) => {
+                self.detail_scroll = u16::MAX; // will be clamped by renderer
+                Ok(Action::None)
+            }
+            // Enter still launches the agent even from detail pane
+            (KeyCode::Enter, _) => {
+                if let Some(t) = self.tasks.get(self.selected) {
+                    Ok(Action::Enter(t.id))
+                } else {
+                    Ok(Action::None)
+                }
+            }
+            (KeyCode::Char('b'), _) => {
+                if let Some(t) = self.tasks.get(self.selected) {
+                    Ok(Action::Background(t.id))
+                } else {
+                    Ok(Action::None)
+                }
+            }
+            (KeyCode::Char('d'), _) => {
+                if let Some(t) = self.tasks.get(self.selected) {
+                    Ok(Action::Delete(t.id))
+                } else {
+                    Ok(Action::None)
+                }
             }
             _ => Ok(Action::None),
         }
@@ -557,6 +650,7 @@ mod tests {
             selected: 0,
             should_quit: false,
             mode: Mode::Normal,
+            focus: Pane::TaskList,
             modal: ModalState::new(&existing),
             error: None,
             tasks,
@@ -1010,5 +1104,158 @@ mod tests {
         let task = make_task_with_agent("codex", "fix the user's login", None);
         let (cmd, _) = build_agent_cmd(&task);
         assert!(cmd.contains("'fix the user'\\''s login'"), "got: {}", cmd);
+    }
+
+    // --- Pane focus ---
+
+    #[test]
+    fn starts_with_tasklist_focus() {
+        let app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        assert_eq!(app.focus, Pane::TaskList);
+    }
+
+    #[test]
+    fn l_moves_to_detail_pane() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::Detail);
+    }
+
+    #[test]
+    fn right_arrow_moves_to_detail_pane() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::Detail);
+    }
+
+    #[test]
+    fn h_moves_back_to_tasklist() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::TaskList);
+    }
+
+    #[test]
+    fn left_arrow_moves_back_to_tasklist() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+        app.handle_key(KeyCode::Left, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::TaskList);
+    }
+
+    #[test]
+    fn esc_from_detail_returns_to_tasklist() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::TaskList);
+    }
+
+    #[test]
+    fn jk_in_detail_scrolls() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 1);
+
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 2);
+
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 1);
+
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 0);
+
+        // Can't scroll below 0
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn jk_in_tasklist_moves_selection_not_scroll() {
+        let mut app = make_app(vec![
+            make_task(1, "a", task::Status::Idle),
+            make_task(2, "b", task::Status::Idle),
+        ]);
+        assert_eq!(app.focus, Pane::TaskList);
+
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn page_down_up_in_detail() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+
+        app.handle_key(KeyCode::PageDown, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 10);
+
+        app.handle_key(KeyCode::PageDown, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 20);
+
+        app.handle_key(KeyCode::PageUp, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 10);
+    }
+
+    #[test]
+    fn g_goes_to_top_G_goes_to_bottom() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+
+        app.handle_key(KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, u16::MAX);
+
+        app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn enter_works_from_detail_pane() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::Enter(1)));
+    }
+
+    #[test]
+    fn n_opens_modal_from_detail_pane() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::NewTask);
+    }
+
+    #[test]
+    fn q_quits_from_detail_pane() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE).unwrap();
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn h_in_tasklist_is_noop() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        assert_eq!(app.focus, Pane::TaskList);
+
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::TaskList); // stays in task list
+    }
+
+    #[test]
+    fn l_in_detail_is_noop() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.focus = Pane::Detail;
+
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::Detail); // stays in detail
     }
 }
