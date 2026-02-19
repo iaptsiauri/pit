@@ -57,7 +57,7 @@ impl ModalField {
     }
 
     pub fn is_text_input(self) -> bool {
-        matches!(self, ModalField::Name | ModalField::Prompt | ModalField::Issue)
+        matches!(self, ModalField::Name | ModalField::Prompt)
     }
 }
 
@@ -146,7 +146,6 @@ impl ModalState {
         match self.field {
             ModalField::Name => Some(&mut self.name),
             ModalField::Prompt => Some(&mut self.prompt),
-            ModalField::Issue => Some(&mut self.issue),
             _ => None,
         }
     }
@@ -155,7 +154,6 @@ impl ModalState {
         match self.field {
             ModalField::Name => &self.name,
             ModalField::Prompt => &self.prompt,
-            ModalField::Issue => &self.issue,
             _ => "",
         }
     }
@@ -568,26 +566,20 @@ impl App {
             (KeyCode::Tab, _) => {
                 let leaving = self.modal.field;
                 self.modal.field = self.modal.field.next();
-                if leaving == ModalField::Issue {
-                    self.modal.try_fetch_issue();
-                }
                 Ok(Action::None)
             }
             (KeyCode::BackTab, _) => {
-                let leaving = self.modal.field;
                 self.modal.field = self.modal.field.prev();
-                if leaving == ModalField::Issue {
-                    self.modal.try_fetch_issue();
-                }
                 Ok(Action::None)
             }
 
-            // Enter: submit (from any field)
-            (KeyCode::Enter, _) if modifiers.contains(KeyModifiers::CONTROL) || !self.modal.field.is_text_input() || self.modal.field == ModalField::Name => {
-                self.try_submit()
+            // Issue field: Enter or Space opens the picker
+            (KeyCode::Enter | KeyCode::Char(' '), _) if self.modal.field == ModalField::Issue => {
+                self.open_issue_picker();
+                Ok(Action::None)
             }
 
-            // Enter in prompt/issue: newline NOT supported (single line), so submit
+            // Enter: submit (from any other field)
             (KeyCode::Enter, _) => {
                 self.try_submit()
             }
@@ -610,26 +602,7 @@ impl App {
 
             // Ctrl+L: open Linear issue picker (from any field)
             (KeyCode::Char('l'), m) if m.contains(KeyModifiers::CONTROL) => {
-                if crate::core::config::get("linear.api_key").is_some() {
-                    self.mode = Mode::IssuePicker;
-                    self.modal.picker_query.clear();
-                    self.modal.picker_selected = 0;
-                    self.modal.picker_status = Some("Loading your issues…".to_string());
-                    // Pre-load assigned issues
-                    match crate::core::linear::my_issues(20) {
-                        Ok(issues) => {
-                            self.modal.picker_status = Some(format!("{} issue(s)", issues.len()));
-                            self.modal.picker_results = issues;
-                        }
-                        Err(e) => {
-                            let msg: String = e.to_string().chars().take(60).collect();
-                            self.modal.picker_status = Some(format!("✗ {}", msg));
-                            self.modal.picker_results.clear();
-                        }
-                    }
-                } else {
-                    self.error = Some("Set Linear key first: pit config set linear.api_key <key>".into());
-                }
+                self.open_issue_picker();
                 Ok(Action::None)
             }
 
@@ -648,6 +621,28 @@ impl App {
             }
 
             _ => Ok(Action::None),
+        }
+    }
+
+    fn open_issue_picker(&mut self) {
+        if crate::core::config::get("linear.api_key").is_some() {
+            self.mode = Mode::IssuePicker;
+            self.modal.picker_query.clear();
+            self.modal.picker_selected = 0;
+            self.modal.picker_status = Some("Loading your issues…".to_string());
+            match crate::core::linear::my_issues(20) {
+                Ok(issues) => {
+                    self.modal.picker_status = Some(format!("{} issue(s)", issues.len()));
+                    self.modal.picker_results = issues;
+                }
+                Err(e) => {
+                    let msg: String = e.to_string().chars().take(60).collect();
+                    self.modal.picker_status = Some(format!("✗ {}", msg));
+                    self.modal.picker_results.clear();
+                }
+            }
+        } else {
+            self.error = Some("Set Linear key first: pit config set linear.api_key <key>".into());
         }
     }
 
@@ -751,11 +746,6 @@ impl App {
     }
 
     fn try_submit(&mut self) -> Result<Action> {
-        // Try to fetch issue if not yet fetched (e.g. user typed URL and pressed Enter directly)
-        if !self.modal.issue.trim().is_empty() {
-            self.modal.try_fetch_issue();
-        }
-
         let name = self.modal.name.trim().to_string();
 
         if name.is_empty() {
@@ -1318,15 +1308,14 @@ mod tests {
     }
 
     #[test]
-    fn modal_typing_in_issue_field() {
+    fn issue_field_rejects_typing() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
         app.modal.field = ModalField::Issue;
-        for c in "https://github.com/org/repo/issues/42".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-        assert_eq!(app.modal.issue, "https://github.com/org/repo/issues/42");
+        app.handle_key(KeyCode::Char('x'), KeyModifiers::NONE).unwrap();
+        // Issue field is not a text input — typing is ignored
+        assert!(app.modal.issue.is_empty());
     }
 
     #[test]
@@ -1919,135 +1908,50 @@ mod tests {
         assert!(app.expanded_files.contains(&0));
     }
 
-    // --- Issue fetch in modal ---
-
-    #[test]
-    fn modal_issue_unknown_url_shows_status() {
-        let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-
-        // Go to issue field
-        app.modal.field = ModalField::Issue;
-        for c in "https://jira.example.com/browse/X-1".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-
-        // Tab away triggers fetch attempt
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        assert!(app.modal.issue_status.is_some());
-        assert!(app.modal.issue_status.as_ref().unwrap().contains("unrecognized"));
-    }
-
-    #[test]
-    fn modal_issue_empty_url_no_fetch() {
-        let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-
-        app.modal.field = ModalField::Issue;
-        // Tab away with empty URL — no status
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        assert!(app.modal.issue_status.is_none());
-    }
-
-    #[test]
-    fn modal_issue_linear_url_detected() {
-        let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-
-        app.modal.field = ModalField::Issue;
-        for c in "https://linear.app/team/issue/ENG-42/fix-bug".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-
-        // Tab away — will try to fetch (will fail without API key, but should set status)
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        assert!(app.modal.issue_status.is_some());
-        // Without LINEAR_API_KEY, should show error
-        let status = app.modal.issue_status.as_ref().unwrap();
-        assert!(
-            status.starts_with('✗') || status.starts_with('⟳'),
-            "expected error or loading status, got: {}",
-            status
-        );
-    }
-
-    #[test]
-    fn modal_issue_github_url_detected() {
-        let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-
-        app.modal.field = ModalField::Issue;
-        for c in "https://github.com/org/repo/issues/42".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-
-        // Tab away — will try to fetch
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        assert!(app.modal.issue_status.is_some());
-    }
-
-    #[test]
-    fn modal_issue_no_refetch_same_url() {
-        let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-
-        app.modal.field = ModalField::Issue;
-        for c in "https://jira.example.com/X-1".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-
-        // First tab: sets status
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        let first_status = app.modal.issue_status.clone();
-
-        // Tab back to issue, tab away again — should not re-fetch
-        app.modal.field = ModalField::Issue;
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.issue_status, first_status);
-    }
-
-    #[test]
-    fn modal_issue_fetch_populates_prompt_if_empty() {
-        // This test verifies the logic without actually calling the API.
-        // We test try_fetch_issue directly.
-        let mut modal = ModalState::new(&[]);
-        modal.prompt = String::new();
-        modal.issue = "https://jira.example.com/browse/X-1".to_string();
-
-        modal.try_fetch_issue();
-        // Unknown URL — prompt stays empty
-        assert!(modal.prompt.is_empty());
-        assert!(modal.issue_status.is_some());
-    }
-
-    #[test]
-    fn modal_issue_does_not_overwrite_existing_prompt() {
-        let mut modal = ModalState::new(&[]);
-        modal.prompt = "my custom prompt".to_string();
-        modal.issue = "https://linear.app/t/issue/X-1/title".to_string();
-
-        // Will fail to fetch (no API key), but even if it succeeded,
-        // it should not overwrite existing prompt
-        modal.try_fetch_issue();
-        assert_eq!(modal.prompt, "my custom prompt");
-    }
-
     // --- Issue picker tests ---
 
     #[test]
-    fn ctrl_l_without_key_shows_error() {
+    fn issue_field_enter_tries_to_open_picker() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.modal.field = ModalField::Issue;
+
+        // Enter on Issue field should NOT submit — it should try to open picker
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        // Either opens picker (if key configured) or shows error — but NOT submitted
+        assert!(app.mode == Mode::IssuePicker || app.error.is_some());
+    }
+
+    #[test]
+    fn issue_field_space_tries_to_open_picker() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.modal.field = ModalField::Issue;
+
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE).unwrap();
+        assert!(app.mode == Mode::IssuePicker || app.error.is_some());
+    }
+
+    #[test]
+    fn issue_field_is_not_text_input() {
+        // Typing in the Issue field should NOT insert characters
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.modal.field = ModalField::Issue;
+
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
+        assert!(app.modal.issue.is_empty());
+    }
+
+    #[test]
+    fn ctrl_l_tries_to_open_picker() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::NewTask);
 
-        // Remove any linear key
-        std::env::remove_var("LINEAR_API_KEY");
-
         app.handle_key(KeyCode::Char('l'), KeyModifiers::CONTROL).unwrap();
-        // Should stay in NewTask mode and show error
-        assert_eq!(app.mode, Mode::NewTask);
-        assert!(app.error.is_some());
-        assert!(app.error.as_ref().unwrap().contains("Linear"));
+        // Either opens picker (if key configured) or shows error
+        assert!(app.mode == Mode::IssuePicker || app.error.is_some());
     }
 
     #[test]

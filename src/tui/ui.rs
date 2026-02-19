@@ -470,39 +470,40 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     frame.render_widget(agent_widget, Rect { x: inner.x, y, width: fw, height: 1 });
     y += 2;
 
-    // --- Issue URL ---
-    draw_field_label(frame, inner.x, y, fw, "Issue URL (Linear, GitHub, Jira)", m.field == ModalField::Issue);
-    y += 1;
-    let issue_display = if m.issue.is_empty() && m.field != ModalField::Issue {
-        "—"
-    } else {
-        &m.issue
-    };
-    let issue_style = if m.field == ModalField::Issue {
-        Style::default().fg(Color::White)
+    // --- Issue ---
+    let issue_active = m.field == ModalField::Issue;
+    let issue_label_style = if issue_active {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let issue_widget = Paragraph::new(Span::styled(format!("  {}", issue_display), issue_style));
-    frame.render_widget(issue_widget, Rect { x: inner.x, y, width: fw, height: 1 });
-    if m.field == ModalField::Issue {
-        frame.set_cursor_position((inner.x + 2 + m.issue.len() as u16, y));
-    }
+    let issue_label = Paragraph::new(Span::styled(" Issue", issue_label_style));
+    frame.render_widget(issue_label, Rect { x: inner.x, y, width: fw, height: 1 });
     y += 1;
 
-    // Issue fetch status
     if let Some(ref status) = m.issue_status {
+        // Show selected issue info
         let status_style = if status.starts_with('✓') {
             Style::default().fg(Color::Green)
-        } else if status.starts_with('✗') {
-            Style::default().fg(Color::Red)
-        } else if status.starts_with('⟳') {
-            Style::default().fg(Color::Yellow)
         } else {
             Style::default().fg(Color::DarkGray)
         };
         let status_widget = Paragraph::new(Span::styled(format!("  {}", status), status_style));
         frame.render_widget(status_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    } else {
+        // Show hint
+        let hint = if issue_active {
+            Line::from(vec![
+                Span::styled("  Press ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Enter", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" or ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Ctrl+L", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" to pick a Linear issue", Style::default().fg(Color::DarkGray)),
+            ])
+        } else {
+            Line::from(Span::styled("  — no issue linked", Style::default().fg(Color::DarkGray)))
+        };
+        frame.render_widget(Paragraph::new(hint), Rect { x: inner.x, y, width: fw, height: 1 });
     }
     y += 1;
 
