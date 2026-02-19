@@ -290,6 +290,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 
                 // Render expanded diff lines
                 if is_expanded {
+                    let is_cursor_file = focused && app.file_cursor == Some(idx);
                     if let Some(diff_lines) = app.file_diffs.get(&idx) {
                         if diff_lines.is_empty() {
                             lines.push(Line::from(Span::styled(
@@ -297,19 +298,26 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                                 Style::default().fg(Color::DarkGray),
                             )));
                         } else {
-                            for dl in diff_lines {
-                                let (style, prefix) = if dl.starts_with('+') {
-                                    (Style::default().fg(Color::Green), "")
+                            for (di, dl) in diff_lines.iter().enumerate() {
+                                let is_active_line = is_cursor_file && app.diff_line == Some(di);
+                                let base_style = if dl.starts_with('+') {
+                                    Style::default().fg(Color::Green)
                                 } else if dl.starts_with('-') {
-                                    (Style::default().fg(Color::Red), "")
+                                    Style::default().fg(Color::Red)
                                 } else if dl.starts_with("@@") {
-                                    (Style::default().fg(Color::Cyan), "")
+                                    Style::default().fg(Color::Cyan)
                                 } else {
-                                    (Style::default().fg(Color::DarkGray), "")
+                                    Style::default().fg(Color::DarkGray)
                                 };
+                                let style = if is_active_line {
+                                    base_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                                } else {
+                                    base_style
+                                };
+                                let line_marker = if is_active_line { "  ▸ " } else { "    " };
                                 let display: String = dl.chars().take(w.saturating_sub(6) as usize).collect();
                                 lines.push(Line::from(Span::styled(
-                                    format!("    {}{}", prefix, display),
+                                    format!("{}{}", line_marker, display),
                                     style,
                                 )));
                             }

@@ -131,6 +131,9 @@ pub struct App {
     pub detail_scroll: u16,
     /// Which file index is selected in the detail pane (None = no file selected).
     pub file_cursor: Option<usize>,
+    /// When inside an expanded diff, which line is highlighted (0-indexed into diff lines).
+    /// None = cursor is on the file header, not inside the diff.
+    pub diff_line: Option<usize>,
     /// Which files have their diff expanded.
     pub expanded_files: std::collections::HashSet<usize>,
     /// Cached file diffs (file index → diff lines).
@@ -155,6 +158,7 @@ impl App {
             detail_task_id: None,
             detail_scroll: 0,
             file_cursor: None,
+            diff_line: None,
             expanded_files: std::collections::HashSet::new(),
             file_diffs: std::collections::HashMap::new(),
         };
@@ -183,6 +187,7 @@ impl App {
         self.detail_task_id = current_id;
         self.detail_scroll = 0;
         self.file_cursor = None;
+        self.diff_line = None;
         self.expanded_files.clear();
         self.file_diffs.clear();
         if let Some(task) = self.tasks.get(self.selected) {
@@ -239,7 +244,18 @@ impl App {
                 return Ok(Action::None);
             }
             (KeyCode::Esc, _) if self.focus == Pane::Detail => {
-                self.focus = Pane::TaskList;
+                // Layered escape: diff_line → collapse file → deselect file → switch pane
+                if self.diff_line.is_some() {
+                    self.diff_line = None;
+                } else if let Some(idx) = self.file_cursor {
+                    if self.expanded_files.contains(&idx) {
+                        self.expanded_files.remove(&idx);
+                    } else {
+                        self.file_cursor = None;
+                    }
+                } else {
+                    self.focus = Pane::TaskList;
+                }
                 return Ok(Action::None);
             }
             _ => {}
@@ -301,6 +317,29 @@ impl App {
             .unwrap_or(0)
     }
 
+    /// How many diff lines the currently selected file has (if expanded).
+    fn current_diff_len(&self) -> usize {
+        if let Some(idx) = self.file_cursor {
+            if self.expanded_files.contains(&idx) {
+                return self.file_diffs.get(&idx).map(|d| d.len()).unwrap_or(0);
+            }
+        }
+        0
+    }
+
+    /// Ensure a file's diff is fetched and cached.
+    fn ensure_diff_cached(&mut self, idx: usize) {
+        if self.file_diffs.contains_key(&idx) {
+            return;
+        }
+        if let (Some(task), Some(info)) = (self.tasks.get(self.selected), self.detail.as_ref()) {
+            if let Some(file) = info.files.get(idx) {
+                let diff = git_info::file_diff(&self.repo_root, &task.branch, &file.path);
+                self.file_diffs.insert(idx, diff);
+            }
+        }
+    }
+
     fn handle_detail_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
         let nfiles = self.file_count();
 
@@ -309,6 +348,39 @@ impl App {
                 if nfiles == 0 {
                     return Ok(Action::None);
                 }
+
+                // If inside an expanded diff, scroll through diff lines
+                if let Some(idx) = self.file_cursor {
+                    if self.expanded_files.contains(&idx) {
+                        let diff_len = self.current_diff_len();
+                        match self.diff_line {
+                            None => {
+                                // Enter the diff: select first line
+                                if diff_len > 0 {
+                                    self.diff_line = Some(0);
+                                    return Ok(Action::None);
+                                }
+                                // Empty diff: fall through to next file
+                            }
+                            Some(line) if line + 1 < diff_len => {
+                                // Move down within diff
+                                self.diff_line = Some(line + 1);
+                                return Ok(Action::None);
+                            }
+                            Some(_) => {
+                                // Past last diff line: move to next file
+                                self.diff_line = None;
+                                if idx + 1 < nfiles {
+                                    self.file_cursor = Some(idx + 1);
+                                }
+                                return Ok(Action::None);
+                            }
+                        }
+                    }
+                }
+
+                // File-level navigation
+                self.diff_line = None;
                 match self.file_cursor {
                     None => {
                         self.file_cursor = Some(0);
@@ -321,39 +393,61 @@ impl App {
                 Ok(Action::None)
             }
             (KeyCode::Up | KeyCode::Char('k'), _) => {
+                // If inside an expanded diff, scroll up through diff lines
+                if let Some(idx) = self.file_cursor {
+                    if self.expanded_files.contains(&idx) {
+                        match self.diff_line {
+                            Some(0) => {
+                                // Back to file header
+                                self.diff_line = None;
+                                return Ok(Action::None);
+                            }
+                            Some(line) => {
+                                self.diff_line = Some(line - 1);
+                                return Ok(Action::None);
+                            }
+                            None => {
+                                // On file header of expanded file.
+                                // Move to previous file. If that file is expanded,
+                                // land on its last diff line.
+                            }
+                        }
+                    }
+                }
+
+                // File-level navigation
+                self.diff_line = None;
                 match self.file_cursor {
                     Some(0) => {
                         self.file_cursor = None;
                     }
                     Some(i) => {
-                        self.file_cursor = Some(i - 1);
+                        let prev = i - 1;
+                        self.file_cursor = Some(prev);
+                        // If previous file is expanded, land on its last diff line
+                        if self.expanded_files.contains(&prev) {
+                            let prev_len = self.file_diffs.get(&prev).map(|d| d.len()).unwrap_or(0);
+                            if prev_len > 0 {
+                                self.diff_line = Some(prev_len - 1);
+                            }
+                        }
                     }
                     None => {}
                 }
                 Ok(Action::None)
             }
-            // Enter: toggle file diff expansion
+            // Enter: toggle file diff expansion (or launch agent if no file selected)
             (KeyCode::Enter, _) => {
                 if let Some(idx) = self.file_cursor {
                     if self.expanded_files.contains(&idx) {
+                        // Collapse
                         self.expanded_files.remove(&idx);
+                        self.diff_line = None;
                     } else {
-                        // Fetch diff if not cached
-                        if !self.file_diffs.contains_key(&idx) {
-                            if let (Some(task), Some(info)) =
-                                (self.tasks.get(self.selected), self.detail.as_ref())
-                            {
-                                if let Some(file) = info.files.get(idx) {
-                                    let diff = git_info::file_diff(
-                                        &self.repo_root,
-                                        &task.branch,
-                                        &file.path,
-                                    );
-                                    self.file_diffs.insert(idx, diff);
-                                }
-                            }
-                        }
+                        // Expand
+                        self.ensure_diff_cached(idx);
                         self.expanded_files.insert(idx);
+                        self.diff_line = None; // cursor on file header
                     }
                 } else {
                     // No file selected — launch agent
@@ -375,10 +469,12 @@ impl App {
             (KeyCode::Home, _) | (KeyCode::Char('g'), _) => {
                 self.detail_scroll = 0;
                 self.file_cursor = None;
+                self.diff_line = None;
                 Ok(Action::None)
             }
             (KeyCode::End, _) | (KeyCode::Char('G'), _) => {
                 self.detail_scroll = u16::MAX;
+                self.diff_line = None;
                 if nfiles > 0 {
                     self.file_cursor = Some(nfiles - 1);
                 }
@@ -727,6 +823,7 @@ mod tests {
             detail_task_id: None,
             detail_scroll: 0,
             file_cursor: None,
+            diff_line: None,
             expanded_files: std::collections::HashSet::new(),
             file_diffs: std::collections::HashMap::new(),
         }
@@ -1229,6 +1326,44 @@ mod tests {
     fn esc_from_detail_returns_to_tasklist() {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.focus = Pane::Detail;
+        // No file selected → switches pane
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.focus, Pane::TaskList);
+    }
+
+    #[test]
+    fn esc_layered_in_detail() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Inside a diff line
+        app.file_cursor = Some(0);
+        app.expanded_files.insert(0);
+        app.file_diffs.insert(0, vec!["@@ @@".into(), "+line".into()]);
+        app.diff_line = Some(1);
+
+        // Esc 1: exits diff line → on file header
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.diff_line, None);
+        assert_eq!(app.file_cursor, Some(0));
+        assert!(app.expanded_files.contains(&0));
+        assert_eq!(app.focus, Pane::Detail);
+
+        // Esc 2: collapses expanded file
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert!(!app.expanded_files.contains(&0));
+        assert_eq!(app.file_cursor, Some(0));
+        assert_eq!(app.focus, Pane::Detail);
+
+        // Esc 3: deselects file
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, None);
+        assert_eq!(app.focus, Pane::Detail);
+
+        // Esc 4: switches pane
         app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
         assert_eq!(app.focus, Pane::TaskList);
     }
@@ -1352,16 +1487,18 @@ mod tests {
     }
 
     #[test]
-    fn g_resets_file_cursor() {
+    fn g_resets_file_cursor_and_diff_line() {
         let mut app = make_app_with_files(
             vec![make_task(1, "a", task::Status::Idle)],
             sample_files(),
         );
         app.focus = Pane::Detail;
         app.file_cursor = Some(2);
+        app.diff_line = Some(5);
 
         app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.file_cursor, None);
+        assert_eq!(app.diff_line, None);
         assert_eq!(app.detail_scroll, 0);
     }
 
@@ -1375,6 +1512,7 @@ mod tests {
 
         app.handle_key(KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.file_cursor, Some(2)); // last of 3 files
+        assert_eq!(app.diff_line, None);
     }
 
     #[test]
@@ -1451,7 +1589,7 @@ mod tests {
     }
 
     #[test]
-    fn jk_navigates_between_files_with_expanded_diff() {
+    fn j_enters_expanded_diff_then_exits_to_next_file() {
         let mut app = make_app_with_files(
             vec![make_task(1, "a", task::Status::Idle)],
             sample_files(),
@@ -1464,21 +1602,83 @@ mod tests {
         // Simulate expanding with cached diff
         app.expanded_files.insert(0);
         app.file_diffs.insert(0, vec![
-            "@@ -0,0 +1,10 @@".into(),
+            "@@ -0,0 +1,3 @@".into(),
             "+fn main() {}".into(),
-            "+// lots of lines".into(),
+            "+// end".into(),
         ]);
 
-        // j should skip past the expanded diff to file 1
+        // j enters the diff: line 0
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.file_cursor, Some(0));
+        assert_eq!(app.diff_line, Some(0));
+
+        // j moves to line 1
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.diff_line, Some(1));
+
+        // j moves to line 2 (last)
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.diff_line, Some(2));
+
+        // j past last line: exits to next file
         app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.file_cursor, Some(1));
+        assert_eq!(app.diff_line, None);
         // file 0 still expanded
         assert!(app.expanded_files.contains(&0));
+    }
 
-        // k goes back to file 0 (still expanded)
+    #[test]
+    fn k_exits_diff_to_file_header() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Select file 0, expand, enter diff
+        app.file_cursor = Some(0);
+        app.expanded_files.insert(0);
+        app.file_diffs.insert(0, vec![
+            "@@ line @@".into(),
+            "+added".into(),
+        ]);
+        app.diff_line = Some(1);
+
+        // k: move to line 0
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.diff_line, Some(0));
+
+        // k: back to file header
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.diff_line, None);
+        assert_eq!(app.file_cursor, Some(0));
+    }
+
+    #[test]
+    fn k_from_file_header_to_prev_file_last_diff_line() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Idle)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+
+        // Expand file 0 with 3 lines
+        app.expanded_files.insert(0);
+        app.file_diffs.insert(0, vec![
+            "@@ hunk @@".into(),
+            "+line1".into(),
+            "+line2".into(),
+        ]);
+
+        // Cursor on file 1 header
+        app.file_cursor = Some(1);
+        app.diff_line = None;
+
+        // k: should go to file 0, last diff line
         app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.file_cursor, Some(0));
-        assert!(app.expanded_files.contains(&0));
+        assert_eq!(app.diff_line, Some(2)); // last line of file 0's diff
     }
 
     #[test]
