@@ -581,10 +581,11 @@ impl App {
     /// `pane_height` is the inner height of the detail area.
     pub fn scroll_detail_to_cursor(&mut self, pane_height: u16) {
         let cursor_line = self.cursor_visual_line() as u16;
-        let h = pane_height.saturating_sub(1); // leave 1 line margin
+        let margin: u16 = 3; // keep 3 lines of context around cursor
+        let h = pane_height.saturating_sub(margin);
 
-        if cursor_line < self.detail_scroll {
-            self.detail_scroll = cursor_line;
+        if cursor_line < self.detail_scroll.saturating_add(margin) {
+            self.detail_scroll = cursor_line.saturating_sub(margin);
         } else if cursor_line >= self.detail_scroll + h {
             self.detail_scroll = cursor_line.saturating_sub(h) + 1;
         }
@@ -694,10 +695,14 @@ impl App {
                         self.expanded_files.remove(&idx);
                         self.diff_line = None;
                     } else {
-                        // Expand
+                        // Expand: scroll so file header is near the top
                         self.ensure_diff_cached(idx);
                         self.expanded_files.insert(idx);
-                        self.diff_line = None; // cursor on file header
+                        self.diff_line = None;
+                        // Put the file header 2 lines from the top so
+                        // the diff content is visible below
+                        let cursor_line = self.cursor_visual_line() as u16;
+                        self.detail_scroll = cursor_line.saturating_sub(2);
                     }
                 } else {
                     // No file selected — launch agent
