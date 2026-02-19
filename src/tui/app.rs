@@ -500,15 +500,15 @@ impl App {
 
     /// Compute the visual line (within the scrollable body) where the
     /// cursor currently sits. The body starts after the pinned header,
-    /// so line 0 = the blank separator, then commits, then files.
+    /// so line 0 = commits header, then commits, then files.
     fn cursor_visual_line(&self) -> usize {
         let info = match self.detail.as_ref() {
             Some(i) => i,
             None => return 0,
         };
 
-        // Body starts with: blank line, commits header, commits, blank, files header
-        let mut line: usize = 1; // blank separator
+        // Body starts with: commits header, commits, blank, files header
+        let mut line: usize = 0;
 
         // Commits header + commits + blank
         line += 1; // "── Commits (N) ──"
@@ -2228,8 +2228,8 @@ mod tests {
 
         let line = app.cursor_visual_line();
         // Body only (header is pinned separately):
-        // blank, commits header, "No commits yet", blank, files header = 5
-        assert_eq!(line, 5, "cursor_visual_line={}", line);
+        // commits header, "No commits yet", blank, files header = 4
+        assert_eq!(line, 4, "cursor_visual_line={}", line);
     }
 
     #[test]

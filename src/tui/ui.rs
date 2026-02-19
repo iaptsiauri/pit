@@ -200,6 +200,12 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
         ]));
     }
 
+    // Divider between header and body
+    header_lines.push(Line::from(Span::styled(
+        "─".repeat(w),
+        Style::default().fg(Color::DarkGray),
+    )));
+
     let header_height = header_lines.len() as u16;
 
     // Split inner into fixed header + scrollable body
@@ -225,7 +231,6 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
 
     // ── Scrollable body (git info) ──
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
 
     // ── Git info ──
     if let Some(ref info) = app.detail {
