@@ -695,7 +695,8 @@ impl App {
                         self.expanded_files.remove(&idx);
                         self.diff_line = None;
                     } else {
-                        // Expand: scroll so file header is near the top
+                        // Collapse any previously expanded file, then expand this one
+                        self.expanded_files.clear();
                         self.ensure_diff_cached(idx);
                         self.expanded_files.insert(idx);
                         self.diff_line = None;
@@ -2157,7 +2158,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_files_can_be_expanded() {
+    fn expanding_new_file_collapses_previous() {
         let mut app =
             make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
@@ -2168,11 +2169,11 @@ mod tests {
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert!(app.expanded_files.contains(&0));
 
-        // Move to file 1 and expand
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
-            .unwrap();
+        // Move to file 1 and expand — file 0 should collapse
+        app.file_cursor = Some(1);
+        app.diff_line = None;
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
-        assert!(app.expanded_files.contains(&0));
+        assert!(!app.expanded_files.contains(&0));
         assert!(app.expanded_files.contains(&1));
     }
 
