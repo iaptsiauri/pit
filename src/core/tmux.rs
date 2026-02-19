@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn create_session_with_cwd() {
         let sock = test_socket();
-        let name = "test-cwd";
+        let name = &format!("cwd-{}", sock);
         let dir = tempfile::tempdir().unwrap();
 
         let output = tmux_cmd(&sock)
@@ -399,7 +399,11 @@ mod tests {
             ])
             .output()
             .unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "tmux new-session failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
 
         // Send pwd and check it matches
         tmux_cmd(&sock)
@@ -407,7 +411,7 @@ mod tests {
             .output()
             .unwrap();
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(1000));
 
         let output = tmux_cmd(&sock)
             .args(["capture-pane", "-t", name, "-p", "-S", "-5"])

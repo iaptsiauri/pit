@@ -565,6 +565,31 @@ fn draw_error_toast(frame: &mut Frame, msg: &str) {
     frame.render_widget(widget, toast_area);
 }
 
+fn config_indicators() -> Vec<Span<'static>> {
+    use crate::core::config;
+
+    let mut spans = vec![Span::raw("  ")];
+
+    let linear = config::get("linear.api_key").is_some();
+    let github = config::get("github.token").is_some();
+
+    if linear {
+        spans.push(Span::styled("Linear✓", Style::default().fg(Color::Green)));
+    } else {
+        spans.push(Span::styled("Linear✗", Style::default().fg(Color::DarkGray)));
+    }
+
+    spans.push(Span::raw(" "));
+
+    if github {
+        spans.push(Span::styled("GitHub✓", Style::default().fg(Color::Green)));
+    } else {
+        spans.push(Span::styled("GitHub✗", Style::default().fg(Color::DarkGray)));
+    }
+
+    spans
+}
+
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     let help = if app.mode == Mode::NewTask {
         Line::from(vec![
@@ -621,6 +646,11 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(":quit"),
         ])
     };
+
+    // Append config indicators to the right
+    let mut spans = help.spans;
+    spans.extend(config_indicators());
+    let help = Line::from(spans);
 
     let bar = Paragraph::new(help).block(
         Block::default()
