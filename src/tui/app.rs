@@ -1072,6 +1072,12 @@ fn handle_create(
 
 /// Build the shell command to launch an agent for a task.
 /// Returns (command, session_id).
+/// Build the shell command to launch an agent for a task.
+/// Returns (command, session_id).
+///
+/// Prompts are written to a `.pit-prompt` file in the worktree and read back
+/// via `cat` to avoid shell escaping issues with backticks, quotes, newlines,
+/// and other special characters that appear in issue descriptions.
 pub fn build_agent_cmd(task: &Task) -> (String, String) {
     let session_id = task
         .session_id
@@ -1079,54 +1085,56 @@ pub fn build_agent_cmd(task: &Task) -> (String, String) {
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let is_resume = task.session_id.is_some();
-    let escaped_prompt = task.prompt.replace('\'', "'\\''");
+
+    // Write prompt to file to avoid shell escaping issues.
+    // The file lives in the task's worktree and is gitignored.
+    let prompt_file = std::path::Path::new(&task.worktree).join(".pit-prompt");
+    if !task.prompt.is_empty() {
+        let _ = std::fs::write(&prompt_file, &task.prompt);
+    }
+    let prompt_path = prompt_file.to_string_lossy();
 
     let cmd = match task.agent.as_str() {
         "codex" => {
-            // OpenAI Codex CLI: no session resume, prompt is positional
             if !task.prompt.is_empty() {
-                format!("codex '{}'", escaped_prompt)
+                format!("codex \"$(cat '{}')\"", prompt_path)
             } else {
                 "codex".to_string()
             }
         }
         "aider" => {
-            // Aider: message via --message flag
             if !task.prompt.is_empty() {
-                format!("aider --message '{}'", escaped_prompt)
+                format!("aider --message \"$(cat '{}')\"", prompt_path)
             } else {
                 "aider".to_string()
             }
         }
         "amp" => {
-            // Amp: prompt via --prompt flag
             if !task.prompt.is_empty() {
-                format!("amp --prompt '{}'", escaped_prompt)
+                format!("amp --prompt \"$(cat '{}')\"", prompt_path)
             } else {
                 "amp".to_string()
             }
         }
         "custom" => {
-            // Custom: just send the prompt as a bare command, user configures their shell
             if !task.prompt.is_empty() {
-                format!("'{}'", escaped_prompt)
+                task.prompt.clone() // custom: prompt IS the command
             } else {
                 "echo 'No agent configured. Type your command.'".to_string()
             }
         }
         // Default: claude (with session resume support)
-        // Note: `-p` is --print (non-interactive, exits when done).
-        // We pass the prompt as a positional argument to stay interactive.
         _ => {
-            let mut c = if is_resume {
+            if is_resume {
                 format!("claude -r {}", session_id)
+            } else if !task.prompt.is_empty() {
+                format!(
+                    "claude --session-id {} \"$(cat '{}')\"",
+                    session_id, prompt_path
+                )
             } else {
                 format!("claude --session-id {}", session_id)
-            };
-            if !is_resume && !task.prompt.is_empty() {
-                c.push_str(&format!(" '{}'", escaped_prompt));
             }
-            c
         }
     };
 
@@ -1629,6 +1637,8 @@ mod tests {
     // --- build_agent_cmd ---
 
     fn make_task_with_agent(agent: &str, prompt: &str, session_id: Option<&str>) -> Task {
+        let worktree = "/tmp/pit-test-wt";
+        let _ = std::fs::create_dir_all(worktree);
         Task {
             id: 1,
             name: "test".to_string(),
@@ -1637,7 +1647,7 @@ mod tests {
             issue_url: String::new(),
             agent: agent.to_string(),
             branch: "pit/test".to_string(),
-            worktree: "/tmp/wt/test".to_string(),
+            worktree: worktree.to_string(),
             status: task::Status::Idle,
             session_id: session_id.map(|s| s.to_string()),
             tmux_session: None,
@@ -1647,18 +1657,22 @@ mod tests {
         }
     }
 
+    fn prompt_file_path() -> String {
+        "/tmp/pit-test-wt/.pit-prompt".to_string()
+    }
+
     #[test]
     fn agent_cmd_claude_new_session() {
         let task = make_task_with_agent("claude", "fix bug", None);
         let (cmd, session_id) = build_agent_cmd(&task);
         assert!(cmd.starts_with("claude --session-id "), "got: {}", cmd);
         assert!(cmd.contains(&session_id));
-        assert!(cmd.contains("'fix bug'"), "got: {}", cmd);
-        assert!(
-            !cmd.contains("-p "),
-            "should not use -p (print mode): {}",
-            cmd
-        );
+        // Prompt read from file via $(cat ...)
+        assert!(cmd.contains("$(cat '"), "got: {}", cmd);
+        assert!(!cmd.contains("-p "), "should not use -p: {}", cmd);
+        // Prompt file written
+        let content = std::fs::read_to_string(prompt_file_path()).unwrap();
+        assert_eq!(content, "fix bug");
     }
 
     #[test]
@@ -1669,8 +1683,8 @@ mod tests {
         assert_eq!(cmd, "claude -r sess-123");
         // Resume should NOT include the prompt
         assert!(
-            !cmd.contains("-p"),
-            "resume should not include prompt, got: {}",
+            !cmd.contains("cat"),
+            "resume should not read prompt file: {}",
             cmd
         );
     }
@@ -1680,14 +1694,16 @@ mod tests {
         let task = make_task_with_agent("claude", "", None);
         let (cmd, _) = build_agent_cmd(&task);
         assert!(cmd.starts_with("claude --session-id "));
-        assert!(!cmd.contains("-p"), "got: {}", cmd);
+        assert!(!cmd.contains("cat"), "got: {}", cmd);
     }
 
     #[test]
     fn agent_cmd_codex_with_prompt() {
         let task = make_task_with_agent("codex", "refactor API", None);
         let (cmd, _) = build_agent_cmd(&task);
-        assert_eq!(cmd, "codex 'refactor API'");
+        assert!(cmd.starts_with("codex \"$(cat '"), "got: {}", cmd);
+        let content = std::fs::read_to_string(prompt_file_path()).unwrap();
+        assert_eq!(content, "refactor API");
     }
 
     #[test]
@@ -1701,7 +1717,7 @@ mod tests {
     fn agent_cmd_aider_with_prompt() {
         let task = make_task_with_agent("aider", "add tests", None);
         let (cmd, _) = build_agent_cmd(&task);
-        assert_eq!(cmd, "aider --message 'add tests'");
+        assert!(cmd.starts_with("aider --message \"$(cat '"), "got: {}", cmd);
     }
 
     #[test]
@@ -1715,7 +1731,7 @@ mod tests {
     fn agent_cmd_amp_with_prompt() {
         let task = make_task_with_agent("amp", "fix login", None);
         let (cmd, _) = build_agent_cmd(&task);
-        assert_eq!(cmd, "amp --prompt 'fix login'");
+        assert!(cmd.starts_with("amp --prompt \"$(cat '"), "got: {}", cmd);
     }
 
     #[test]
@@ -1729,7 +1745,8 @@ mod tests {
     fn agent_cmd_custom_with_prompt() {
         let task = make_task_with_agent("custom", "my-script --flag", None);
         let (cmd, _) = build_agent_cmd(&task);
-        assert_eq!(cmd, "'my-script --flag'");
+        // Custom: prompt IS the command (no wrapping)
+        assert_eq!(cmd, "my-script --flag");
     }
 
     #[test]
@@ -1743,21 +1760,21 @@ mod tests {
     fn agent_cmd_unknown_falls_back_to_claude() {
         let task = make_task_with_agent("mystery-agent", "do stuff", None);
         let (cmd, _) = build_agent_cmd(&task);
-        // Unknown agents fall through to the claude default
         assert!(cmd.starts_with("claude --session-id "), "got: {}", cmd);
-        assert!(cmd.contains("'do stuff'"), "got: {}", cmd);
-        assert!(
-            !cmd.contains("-p "),
-            "should not use -p (print mode): {}",
-            cmd
-        );
+        assert!(cmd.contains("$(cat '"), "got: {}", cmd);
+        assert!(!cmd.contains("-p "), "should not use -p: {}", cmd);
     }
 
     #[test]
-    fn agent_cmd_escapes_single_quotes() {
-        let task = make_task_with_agent("codex", "fix the user's login", None);
+    fn agent_cmd_prompt_file_handles_special_chars() {
+        let prompt = "Fix `bug` in user's\nlogin with $PATH and \"quotes\"";
+        let task = make_task_with_agent("claude", prompt, None);
         let (cmd, _) = build_agent_cmd(&task);
-        assert!(cmd.contains("'fix the user'\\''s login'"), "got: {}", cmd);
+        // Command uses file-based prompt, not inline
+        assert!(cmd.contains("$(cat '"), "got: {}", cmd);
+        // File contains the exact prompt, unescaped
+        let content = std::fs::read_to_string(prompt_file_path()).unwrap();
+        assert_eq!(content, prompt);
     }
 
     // --- Pane focus ---

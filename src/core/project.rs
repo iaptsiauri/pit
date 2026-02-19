@@ -89,43 +89,50 @@ impl Project {
     }
 }
 
-/// Ensure `.pit` is listed in `.gitignore`.
+/// Ensure `.pit` and `.pit-prompt` are listed in `.gitignore`.
 fn ensure_gitignored(repo_root: &Path) -> Result<()> {
     let gitignore = repo_root.join(".gitignore");
-    if gitignore.exists() {
-        let content = std::fs::read_to_string(&gitignore)?;
-        if content
-            .lines()
-            .any(|l| l.trim() == ".pit" || l.trim() == ".pit/")
-        {
-            return Ok(());
-        }
-    }
-
-    // Check via git — maybe .pit is ignored by a parent .gitignore or global ignore
-    let output = Command::new("git")
-        .args(["check-ignore", "-q", ".pit"])
-        .current_dir(repo_root)
-        .output();
-
-    if let Ok(out) = output {
-        if out.status.success() {
-            return Ok(()); // Already ignored by some rule
-        }
-    }
-
-    // Append to .gitignore
     let mut content = if gitignore.exists() {
         std::fs::read_to_string(&gitignore)?
     } else {
         String::new()
     };
 
-    if !content.is_empty() && !content.ends_with('\n') {
+    let entries = [".pit", ".pit-prompt"];
+    let mut needs_write = false;
+
+    for entry in &entries {
+        let already_present = content
+            .lines()
+            .any(|l| l.trim() == *entry || l.trim() == format!("{}/", entry));
+
+        if already_present {
+            continue;
+        }
+
+        // Check via git — maybe it's ignored by a parent .gitignore or global ignore
+        let output = Command::new("git")
+            .args(["check-ignore", "-q", entry])
+            .current_dir(repo_root)
+            .output();
+
+        if let Ok(out) = output {
+            if out.status.success() {
+                continue; // Already ignored by some rule
+            }
+        }
+
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(entry);
         content.push('\n');
+        needs_write = true;
     }
-    content.push_str(".pit\n");
-    std::fs::write(&gitignore, content)?;
+
+    if needs_write {
+        std::fs::write(&gitignore, content)?;
+    }
 
     Ok(())
 }
@@ -180,7 +187,22 @@ mod tests {
         let _p2 = Project::init(repo.path()).unwrap();
         // No error, no duplicate .gitignore entries
         let content = std::fs::read_to_string(repo.path().join(".gitignore")).unwrap();
-        assert_eq!(content.matches(".pit").count(), 1);
+        // Should have exactly one ".pit" line and one ".pit-prompt" line
+        assert_eq!(
+            content.lines().filter(|l| l.trim() == ".pit").count(),
+            1,
+            "gitignore: {}",
+            content
+        );
+        assert_eq!(
+            content
+                .lines()
+                .filter(|l| l.trim() == ".pit-prompt")
+                .count(),
+            1,
+            "gitignore: {}",
+            content
+        );
     }
 
     #[test]
