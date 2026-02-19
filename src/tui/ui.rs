@@ -138,15 +138,12 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
         height: area.height.saturating_sub(2),
     };
 
-    // Store the pane height so App can auto-scroll after key events
-    app.detail_pane_height = inner.height;
-
-    // Build all lines for the detail view
-    let mut lines: Vec<Line> = Vec::new();
     let w = inner.width as usize;
 
-    // ── Header ──
-    lines.push(Line::from(vec![Span::styled(
+    // ── Fixed header (pinned at top) ──
+    let mut header_lines: Vec<Line> = Vec::new();
+
+    header_lines.push(Line::from(vec![Span::styled(
         &task.name,
         Style::default()
             .fg(Color::White)
@@ -154,7 +151,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
     )]));
 
     // Status + agent
-    lines.push(Line::from(vec![
+    header_lines.push(Line::from(vec![
         Span::styled(
             format!("{} {}", status_icon(&task.status), task.status),
             status_color(task.status.clone()),
@@ -167,7 +164,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
     ]));
 
     // Branch
-    lines.push(Line::from(vec![
+    header_lines.push(Line::from(vec![
         Span::styled("branch: ", Style::default().fg(Color::DarkGray)),
         Span::styled(&task.branch, Style::default().fg(Color::Cyan)),
     ]));
@@ -181,7 +178,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
         } else {
             ""
         };
-        lines.push(Line::from(vec![
+        header_lines.push(Line::from(vec![
             Span::styled("prompt: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{}{}", truncated, suffix),
@@ -192,7 +189,7 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
 
     // Issue URL (if set)
     if !task.issue_url.is_empty() {
-        lines.push(Line::from(vec![
+        header_lines.push(Line::from(vec![
             Span::styled("issue:  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 &task.issue_url,
@@ -203,6 +200,31 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
         ]));
     }
 
+    let header_height = header_lines.len() as u16;
+
+    // Split inner into fixed header + scrollable body
+    let header_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: header_height.min(inner.height),
+    };
+    let body_area = Rect {
+        x: inner.x,
+        y: inner.y + header_area.height,
+        width: inner.width,
+        height: inner.height.saturating_sub(header_area.height),
+    };
+
+    // Render fixed header
+    let header_paragraph = Paragraph::new(header_lines);
+    frame.render_widget(header_paragraph, header_area);
+
+    // Store the scrollable body height for auto-scroll calculations
+    app.detail_pane_height = body_area.height;
+
+    // ── Scrollable body (git info) ──
+    let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
 
     // ── Git info ──
@@ -393,10 +415,10 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
     let visible: Vec<Line> = lines
         .into_iter()
         .skip(app.detail_scroll as usize)
-        .take(inner.height as usize)
+        .take(body_area.height as usize)
         .collect();
     let paragraph = Paragraph::new(visible);
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, body_area);
 }
 
 fn status_icon(status: &Status) -> &'static str {

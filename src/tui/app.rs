@@ -498,33 +498,17 @@ impl App {
         }
     }
 
-    /// Compute the visual line (within the detail pane content) where the
-    /// cursor currently sits. Used to auto-scroll the detail pane.
+    /// Compute the visual line (within the scrollable body) where the
+    /// cursor currently sits. The body starts after the pinned header,
+    /// so line 0 = the blank separator, then commits, then files.
     fn cursor_visual_line(&self) -> usize {
         let info = match self.detail.as_ref() {
             Some(i) => i,
             None => return 0,
         };
 
-        // Count fixed header lines:
-        // name, status+agent, branch = 3
-        // + prompt (if set) + issue (if set)
-        // + blank
-        // + commits header + commits + blank
-        // + files header
-        let task = match self.tasks.get(self.selected) {
-            Some(t) => t,
-            None => return 0,
-        };
-
-        let mut line: usize = 3; // name, status, branch
-        if !task.prompt.is_empty() {
-            line += 1;
-        }
-        if !task.issue_url.is_empty() {
-            line += 1;
-        }
-        line += 1; // blank
+        // Body starts with: blank line, commits header, commits, blank, files header
+        let mut line: usize = 1; // blank separator
 
         // Commits header + commits + blank
         line += 1; // "── Commits (N) ──"
@@ -2243,9 +2227,9 @@ mod tests {
         app.file_cursor = Some(0);
 
         let line = app.cursor_visual_line();
-        // Should be after: name, status, branch, blank, commits header,
-        // "No commits yet", blank, files header = 8 lines
-        assert!(line >= 7, "cursor_visual_line={}", line);
+        // Body only (header is pinned separately):
+        // blank, commits header, "No commits yet", blank, files header = 5
+        assert_eq!(line, 5, "cursor_visual_line={}", line);
     }
 
     #[test]
