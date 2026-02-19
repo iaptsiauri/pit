@@ -407,6 +407,143 @@ fn digit_count(n: usize) -> usize {
     }
 }
 
+/// Number of visible lines in the prompt textarea.
+pub const PROMPT_VISIBLE_LINES: usize = 6;
+/// Approximate inner text width for the prompt textarea (modal_width - borders/padding).
+pub const PROMPT_TEXT_WIDTH: usize = 62;
+
+// ── Text wrapping helpers ────────────────────────────────────────────────────
+
+/// Wrap text into lines that fit within `width` columns.
+/// Handles explicit newlines and word-wrapping.
+pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        if raw_line.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        for word in raw_line.split(' ') {
+            if current.is_empty() {
+                if word.len() > width {
+                    // Break long word across lines
+                    let mut chars = word.chars();
+                    while current.len() < word.len() {
+                        if let Some(c) = chars.next() {
+                            if current.len() + c.len_utf8() > width {
+                                lines.push(current);
+                                current = String::new();
+                            }
+                            current.push(c);
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    current = word.to_string();
+                }
+            } else if current.len() + 1 + word.len() > width {
+                lines.push(current);
+                if word.len() > width {
+                    current = String::new();
+                    for c in word.chars() {
+                        if current.len() + c.len_utf8() > width {
+                            lines.push(current);
+                            current = String::new();
+                        }
+                        current.push(c);
+                    }
+                } else {
+                    current = word.to_string();
+                }
+            } else {
+                current.push(' ');
+                current.push_str(word);
+            }
+        }
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Given a string, a byte cursor position, and wrap width, return the
+/// (visual_row, visual_col) of the cursor within the wrapped output.
+pub fn cursor_pos_in_wrapped(text: &str, cursor: usize, width: usize) -> (usize, usize) {
+    if width == 0 {
+        return (0, 0);
+    }
+    let cursor = cursor.min(text.len());
+
+    // We need to reconstruct the wrapping character by character to track
+    // where the cursor byte offset lands visually.
+    let mut row: usize = 0;
+    let mut col: usize = 0;
+    let mut byte_pos: usize = 0;
+
+    // Split by newlines first
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (line_idx, raw_line) in lines.iter().enumerate() {
+        let line_start_byte = byte_pos;
+        let line_end_byte = byte_pos + raw_line.len();
+
+        if cursor >= line_start_byte && cursor <= line_end_byte {
+            // Cursor is within this raw line
+            let offset_in_line = cursor - line_start_byte;
+            // Wrap this line and find position
+            let wrapped = wrap_text(raw_line, width);
+            let mut consumed = 0;
+            for (wrap_idx, wline) in wrapped.iter().enumerate() {
+                let wlen = wline.len();
+                // Account for spaces consumed between words during wrapping
+                if offset_in_line <= consumed + wlen {
+                    col = offset_in_line - consumed;
+                    row += wrap_idx;
+                    return (row, col);
+                }
+                consumed += wlen;
+                // Skip the space or nothing that was between this wrapped line and next
+                if consumed < raw_line.len() {
+                    // The character at `consumed` in the raw line was either a space
+                    // that caused the wrap break, or continuation
+                    if raw_line.as_bytes().get(consumed) == Some(&b' ') {
+                        consumed += 1; // skip the space that was the break point
+                    }
+                }
+            }
+            // Fallback: end of last wrapped line
+            col = wrapped.last().map(|l| l.len()).unwrap_or(0);
+            row += wrapped.len().saturating_sub(1);
+            return (row, col);
+        }
+
+        let wrapped_count = wrap_text(raw_line, width).len();
+        row += wrapped_count;
+        byte_pos = line_end_byte;
+
+        // Account for the newline character
+        if line_idx < lines.len() - 1 {
+            byte_pos += 1; // '\n'
+            if cursor == byte_pos - 1 {
+                // Cursor is right on the '\n' — show at end of last wrapped line
+                col = wrap_text(raw_line, width)
+                    .last()
+                    .map(|l| l.len())
+                    .unwrap_or(0);
+                return (row - 1, col);
+            }
+        }
+    }
+
+    (row.saturating_sub(1), col)
+}
+
 // ── Modal ───────────────────────────────────────────────────────────────────
 
 // ── Kanban view ─────────────────────────────────────────────────────────
@@ -525,8 +662,8 @@ fn draw_kanban(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_modal(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    let modal_width = 64u16.min(area.width.saturating_sub(4));
-    let modal_height = 21u16.min(area.height.saturating_sub(2));
+    let modal_width = 70u16.min(area.width.saturating_sub(4));
+    let modal_height = 26u16.min(area.height.saturating_sub(2));
 
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -576,42 +713,122 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     }
     y += 2;
 
-    // --- Agent prompt ---
-    draw_field_label(
-        frame,
-        inner.x,
-        y,
-        fw,
-        "Agent prompt",
-        m.field == ModalField::Prompt,
-    );
+    // --- Agent prompt (multi-line textarea) ---
+    let prompt_focused = m.field == ModalField::Prompt;
+    draw_field_label(frame, inner.x, y, fw, "Agent prompt", prompt_focused);
     y += 1;
-    let prompt_display = if m.prompt.is_empty() && m.field != ModalField::Prompt {
-        "e.g. Fix the login timeout bug and add tests"
+
+    let prompt_visible_lines: u16 = PROMPT_VISIBLE_LINES as u16;
+    let text_width = (fw.saturating_sub(4)) as usize; // 2 padding + 1 border each side
+
+    let (prompt_display, is_placeholder) = if m.prompt.is_empty() && !prompt_focused {
+        (
+            "e.g. Fix the login timeout bug and add tests".to_string(),
+            true,
+        )
     } else {
-        &m.prompt
+        (m.prompt.clone(), false)
     };
-    let prompt_style = if m.prompt.is_empty() && m.field != ModalField::Prompt {
+
+    // Wrap text into visual lines
+    let wrapped = wrap_text(&prompt_display, text_width);
+
+    // Find cursor visual position (row, col) within wrapped lines
+    let (cursor_row, cursor_col) = if prompt_focused && !is_placeholder {
+        cursor_pos_in_wrapped(&m.prompt, m.prompt_cursor, text_width)
+    } else {
+        (0, 0)
+    };
+
+    // Scroll is maintained by App via update_prompt_scroll()
+    let scroll = m.prompt_scroll;
+
+    let prompt_style = if is_placeholder {
         Style::default().fg(Color::DarkGray)
-    } else if m.field == ModalField::Prompt {
+    } else if prompt_focused {
         Style::default().fg(Color::White)
     } else {
         Style::default().fg(Color::Gray)
     };
-    let prompt_widget = Paragraph::new(Span::styled(format!("  {}", prompt_display), prompt_style));
-    frame.render_widget(
-        prompt_widget,
-        Rect {
-            x: inner.x,
-            y,
-            width: fw,
-            height: 1,
-        },
-    );
-    if m.field == ModalField::Prompt {
-        frame.set_cursor_position((inner.x + 2 + m.prompt.len() as u16, y));
+
+    let border_color = if prompt_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    // Draw border around textarea
+    let textarea_rect = Rect {
+        x: inner.x,
+        y,
+        width: fw,
+        height: prompt_visible_lines + 2, // +2 for top/bottom border
+    };
+    let textarea_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    frame.render_widget(textarea_block, textarea_rect);
+
+    // Render visible lines inside the border
+    let text_area_inner = Rect {
+        x: inner.x + 2,
+        y: y + 1,
+        width: fw.saturating_sub(4),
+        height: prompt_visible_lines,
+    };
+
+    let visible: Vec<Line> = wrapped
+        .iter()
+        .skip(scroll)
+        .take(prompt_visible_lines as usize)
+        .map(|l| Line::from(Span::styled(l.as_str(), prompt_style)))
+        .collect();
+
+    let text_widget = Paragraph::new(visible);
+    frame.render_widget(text_widget, text_area_inner);
+
+    // Scroll indicator on the right border
+    if wrapped.len() > prompt_visible_lines as usize {
+        let total = wrapped.len();
+        let vl = prompt_visible_lines as usize;
+        // Thumb position
+        let thumb_pos = if total <= vl {
+            0
+        } else {
+            (scroll * (vl - 1)) / (total - vl)
+        };
+        for row_i in 0..prompt_visible_lines {
+            let ch = if row_i as usize == thumb_pos {
+                "█"
+            } else {
+                "│"
+            };
+            let style = if row_i as usize == thumb_pos {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            frame.render_widget(
+                Paragraph::new(Span::styled(ch, style)),
+                Rect {
+                    x: inner.x + fw - 1,
+                    y: y + 1 + row_i,
+                    width: 1,
+                    height: 1,
+                },
+            );
+        }
     }
-    y += 2;
+
+    // Place cursor
+    if prompt_focused && !is_placeholder {
+        let vis_row = cursor_row.saturating_sub(scroll);
+        if vis_row < prompt_visible_lines as usize {
+            frame.set_cursor_position((inner.x + 2 + cursor_col as u16, y + 1 + vis_row as u16));
+        }
+    }
+
+    y += prompt_visible_lines + 2 + 1; // textarea height + 1 gap
 
     // --- Agent ---
     draw_field_label(frame, inner.x, y, fw, "Agent", m.field == ModalField::Agent);
@@ -1320,4 +1537,92 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     frame.render_widget(bar, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_short_text() {
+        let lines = wrap_text("hello world", 20);
+        assert_eq!(lines, vec!["hello world"]);
+    }
+
+    #[test]
+    fn wrap_at_boundary() {
+        let lines = wrap_text("hello world", 5);
+        assert_eq!(lines, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn wrap_long_word() {
+        let lines = wrap_text("abcdefghij", 4);
+        assert_eq!(lines, vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn wrap_preserves_newlines() {
+        let lines = wrap_text("line1\nline2\nline3", 20);
+        assert_eq!(lines, vec!["line1", "line2", "line3"]);
+    }
+
+    #[test]
+    fn wrap_empty_lines() {
+        let lines = wrap_text("a\n\nb", 20);
+        assert_eq!(lines, vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn wrap_multiline_with_wrapping() {
+        let lines = wrap_text("hello world\nfoo bar baz", 8);
+        assert_eq!(lines, vec!["hello", "world", "foo bar", "baz"]);
+    }
+
+    #[test]
+    fn cursor_at_start() {
+        let (row, col) = cursor_pos_in_wrapped("hello world", 0, 20);
+        assert_eq!((row, col), (0, 0));
+    }
+
+    #[test]
+    fn cursor_at_end() {
+        let (row, col) = cursor_pos_in_wrapped("hello", 5, 20);
+        assert_eq!((row, col), (0, 5));
+    }
+
+    #[test]
+    fn cursor_on_second_wrapped_line() {
+        // "hello world" wraps to ["hello", "world"] at width 5
+        // Cursor at byte 6 = 'w' in "world" = row 1, col 0
+        let (row, col) = cursor_pos_in_wrapped("hello world", 6, 5);
+        assert_eq!((row, col), (1, 0));
+    }
+
+    #[test]
+    fn cursor_after_newline() {
+        // "a\nb" -> row 0: "a", row 1: "b"
+        // cursor at byte 2 = 'b' = row 1, col 0
+        let (row, col) = cursor_pos_in_wrapped("a\nb", 2, 20);
+        assert_eq!((row, col), (1, 0));
+    }
+
+    #[test]
+    fn cursor_on_newline_char() {
+        // "ab\ncd" cursor at byte 2 = the '\n' itself
+        let (row, _col) = cursor_pos_in_wrapped("ab\ncd", 2, 20);
+        assert_eq!(row, 0); // shows at end of first line
+    }
+
+    #[test]
+    fn wrap_empty_string() {
+        let lines = wrap_text("", 20);
+        assert_eq!(lines, vec![""]);
+    }
+
+    #[test]
+    fn cursor_in_empty_string() {
+        let (row, col) = cursor_pos_in_wrapped("", 0, 20);
+        assert_eq!((row, col), (0, 0));
+    }
 }

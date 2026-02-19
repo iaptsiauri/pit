@@ -75,6 +75,10 @@ pub struct ModalState {
     pub field: ModalField,
     pub name: String,
     pub prompt: String,
+    /// Cursor position within the prompt string (byte offset)
+    pub prompt_cursor: usize,
+    /// Scroll offset for the prompt textarea (first visible line)
+    pub prompt_scroll: usize,
     pub agent: String,
     pub issue: String,
     pub auto_approve: bool,
@@ -95,6 +99,8 @@ impl ModalState {
             field: ModalField::Name,
             name: names::generate(existing_names),
             prompt: String::new(),
+            prompt_cursor: 0,
+            prompt_scroll: 0,
             agent: "claude".to_string(),
             issue: String::new(),
             auto_approve: false,
@@ -106,13 +112,26 @@ impl ModalState {
         }
     }
 
-    /// Try to fetch issue data from the URL and populate the prompt.
-    /// Only fetches if the URL changed since last fetch.
     fn active_text_mut(&mut self) -> Option<&mut String> {
         match self.field {
             ModalField::Name => Some(&mut self.name),
             ModalField::Prompt => Some(&mut self.prompt),
             _ => None,
+        }
+    }
+
+    /// Update prompt_scroll so cursor stays visible in the textarea.
+    pub fn update_prompt_scroll(&mut self) {
+        let (cursor_row, _) = crate::tui::ui::cursor_pos_in_wrapped(
+            &self.prompt,
+            self.prompt_cursor,
+            crate::tui::ui::PROMPT_TEXT_WIDTH,
+        );
+        let vl = crate::tui::ui::PROMPT_VISIBLE_LINES;
+        if cursor_row < self.prompt_scroll {
+            self.prompt_scroll = cursor_row;
+        } else if cursor_row >= self.prompt_scroll + vl {
+            self.prompt_scroll = cursor_row.saturating_sub(vl - 1);
         }
     }
 
@@ -230,8 +249,19 @@ impl App {
         self.error = None;
         match self.mode {
             Mode::Normal => self.handle_normal_key(code, modifiers),
-            Mode::NewTask => self.handle_modal_key(code, modifiers),
-            Mode::IssuePicker => self.handle_picker_key(code, modifiers),
+            Mode::NewTask => {
+                let result = self.handle_modal_key(code, modifiers);
+                self.modal.update_prompt_scroll();
+                result
+            }
+            Mode::IssuePicker => {
+                let result = self.handle_picker_key(code, modifiers);
+                // Update scroll in case picker filled the prompt
+                if self.mode == Mode::NewTask {
+                    self.modal.update_prompt_scroll();
+                }
+                result
+            }
         }
     }
 
@@ -664,9 +694,95 @@ impl App {
                 Ok(Action::None)
             }
 
-            // Text input
+            // Prompt-specific: cursor movement
+            (KeyCode::Left, _) if self.modal.field == ModalField::Prompt => {
+                if self.modal.prompt_cursor > 0 {
+                    // Move back one char boundary
+                    let prev = self.modal.prompt[..self.modal.prompt_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.modal.prompt_cursor = prev;
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Right, _) if self.modal.field == ModalField::Prompt => {
+                if self.modal.prompt_cursor < self.modal.prompt.len() {
+                    // Move forward one char boundary
+                    let next = self.modal.prompt[self.modal.prompt_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.modal.prompt_cursor + i)
+                        .unwrap_or(self.modal.prompt.len());
+                    self.modal.prompt_cursor = next;
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Home, _) if self.modal.field == ModalField::Prompt => {
+                // Move to start of current line
+                let before = &self.modal.prompt[..self.modal.prompt_cursor];
+                self.modal.prompt_cursor = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                Ok(Action::None)
+            }
+            (KeyCode::End, _) if self.modal.field == ModalField::Prompt => {
+                // Move to end of current line
+                let after = &self.modal.prompt[self.modal.prompt_cursor..];
+                self.modal.prompt_cursor = after
+                    .find('\n')
+                    .map(|i| self.modal.prompt_cursor + i)
+                    .unwrap_or(self.modal.prompt.len());
+                Ok(Action::None)
+            }
+            (KeyCode::Up, _) if self.modal.field == ModalField::Prompt => {
+                // Move cursor to previous line
+                let before = &self.modal.prompt[..self.modal.prompt_cursor];
+                if let Some(newline_pos) = before.rfind('\n') {
+                    // Find column offset in current line
+                    let line_start = before[..newline_pos]
+                        .rfind('\n')
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    let col = self.modal.prompt_cursor - (newline_pos + 1);
+                    let prev_line_len = newline_pos - line_start;
+                    self.modal.prompt_cursor = line_start + col.min(prev_line_len);
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Down, _) if self.modal.field == ModalField::Prompt => {
+                // Move cursor to next line
+                let after = &self.modal.prompt[self.modal.prompt_cursor..];
+                if let Some(newline_pos) = after.find('\n') {
+                    let abs_newline = self.modal.prompt_cursor + newline_pos;
+                    // Column offset in current line
+                    let before = &self.modal.prompt[..self.modal.prompt_cursor];
+                    let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    let col = self.modal.prompt_cursor - line_start;
+                    // Next line bounds
+                    let next_line_start = abs_newline + 1;
+                    let next_line_end = self.modal.prompt[next_line_start..]
+                        .find('\n')
+                        .map(|i| next_line_start + i)
+                        .unwrap_or(self.modal.prompt.len());
+                    let next_line_len = next_line_end - next_line_start;
+                    self.modal.prompt_cursor = next_line_start + col.min(next_line_len);
+                }
+                Ok(Action::None)
+            }
+
+            // Text input (name field: append at end; prompt field: insert at cursor)
             (KeyCode::Backspace, _) if self.modal.field.is_text_input() => {
-                if let Some(text) = self.modal.active_text_mut() {
+                if self.modal.field == ModalField::Prompt {
+                    if self.modal.prompt_cursor > 0 {
+                        let prev = self.modal.prompt[..self.modal.prompt_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        self.modal.prompt.drain(prev..self.modal.prompt_cursor);
+                        self.modal.prompt_cursor = prev;
+                    }
+                } else if let Some(text) = self.modal.active_text_mut() {
                     text.pop();
                 }
                 Ok(Action::None)
@@ -674,7 +790,10 @@ impl App {
             (KeyCode::Char(c), m)
                 if self.modal.field.is_text_input() && !m.contains(KeyModifiers::CONTROL) =>
             {
-                if let Some(text) = self.modal.active_text_mut() {
+                if self.modal.field == ModalField::Prompt {
+                    self.modal.prompt.insert(self.modal.prompt_cursor, c);
+                    self.modal.prompt_cursor += c.len_utf8();
+                } else if let Some(text) = self.modal.active_text_mut() {
                     text.push(c);
                 }
                 Ok(Action::None)
@@ -744,6 +863,8 @@ impl App {
 
                     // Fill prompt from issue title + description
                     self.modal.prompt = crate::core::linear::issue_to_prompt(&issue);
+                    self.modal.prompt_cursor = self.modal.prompt.len();
+                    self.modal.prompt_scroll = 0;
 
                     // Auto-fill name if it's still the generated default
                     let slug: String = issue.identifier.to_lowercase().replace(' ', "-");
@@ -751,6 +872,8 @@ impl App {
                         self.modal.name = slug;
                     }
                 }
+                // Focus prompt field so user can review/edit the issue text
+                self.modal.field = ModalField::Prompt;
                 self.mode = Mode::NewTask;
                 Ok(Action::None)
             }
@@ -2261,6 +2384,130 @@ mod tests {
         app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
             .unwrap();
         assert_eq!(app.modal.picker_query, "a");
+    }
+
+    // --- Prompt textarea ---
+
+    #[test]
+    fn picker_focuses_prompt_after_selection() {
+        let mut app = make_app(vec![]);
+        app.mode = Mode::IssuePicker;
+        app.modal.picker_results = vec![crate::core::linear::LinearIssue {
+            identifier: "ENG-1".into(),
+            title: "Task".into(),
+            description: "Desc".into(),
+            state: "Todo".into(),
+            priority_label: String::new(),
+            url: String::new(),
+        }];
+        app.modal.picker_selected = 0;
+
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::NewTask);
+        assert_eq!(app.modal.field, ModalField::Prompt);
+    }
+
+    #[test]
+    fn prompt_cursor_at_end_after_issue_fill() {
+        let mut app = make_app(vec![]);
+        app.mode = Mode::IssuePicker;
+        app.modal.picker_results = vec![crate::core::linear::LinearIssue {
+            identifier: "ENG-1".into(),
+            title: "Task".into(),
+            description: "Some description".into(),
+            state: "Todo".into(),
+            priority_label: String::new(),
+            url: String::new(),
+        }];
+        app.modal.picker_selected = 0;
+
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.prompt_cursor, app.modal.prompt.len());
+    }
+
+    #[test]
+    fn prompt_cursor_insert_at_position() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
+        assert_eq!(app.mode, Mode::NewTask);
+        app.modal.field = ModalField::Prompt;
+        app.modal.prompt = "helo".to_string();
+        app.modal.prompt_cursor = 3; // between 'l' and 'o'
+
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE)
+            .unwrap();
+        assert_eq!(app.modal.prompt, "hello");
+        assert_eq!(app.modal.prompt_cursor, 4);
+    }
+
+    #[test]
+    fn prompt_cursor_backspace_at_position() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
+        app.modal.field = ModalField::Prompt;
+        app.modal.prompt = "hello".to_string();
+        app.modal.prompt_cursor = 3; // after 'l'
+
+        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
+            .unwrap();
+        assert_eq!(app.modal.prompt, "helo");
+        assert_eq!(app.modal.prompt_cursor, 2);
+    }
+
+    #[test]
+    fn prompt_cursor_left_right() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
+        app.modal.field = ModalField::Prompt;
+        app.modal.prompt = "abc".to_string();
+        app.modal.prompt_cursor = 2;
+
+        app.handle_key(KeyCode::Left, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.prompt_cursor, 1);
+
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.prompt_cursor, 2);
+    }
+
+    #[test]
+    fn prompt_cursor_up_down_lines() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
+        app.modal.field = ModalField::Prompt;
+        app.modal.prompt = "line1\nline2\nline3".to_string();
+        app.modal.prompt_cursor = 8; // "line2" position 2 = 'n'
+
+        app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
+        // Should move to line1, col 2
+        assert_eq!(app.modal.prompt_cursor, 2);
+
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        // Should move back to line2, col 2
+        assert_eq!(app.modal.prompt_cursor, 8);
+
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        // Should move to line3, col 2
+        assert_eq!(app.modal.prompt_cursor, 14);
+    }
+
+    #[test]
+    fn prompt_home_end() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
+        app.modal.field = ModalField::Prompt;
+        app.modal.prompt = "hello\nworld".to_string();
+        app.modal.prompt_cursor = 8; // 'r' in "world"
+
+        app.handle_key(KeyCode::Home, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.prompt_cursor, 6); // start of "world"
+
+        app.handle_key(KeyCode::End, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.prompt_cursor, 11); // end of "world"
     }
 
     // --- Kanban ---
