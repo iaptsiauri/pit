@@ -40,6 +40,8 @@ pub struct Task {
     pub id: i64,
     pub name: String,
     pub description: String,
+    pub prompt: String,
+    pub issue_url: String,
     pub branch: String,
     pub worktree: String,
     pub status: Status,
@@ -50,13 +52,23 @@ pub struct Task {
     pub updated_at: String,
 }
 
+/// Options for creating a new task.
+#[derive(Debug, Default)]
+pub struct CreateOpts<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub prompt: &'a str,
+    pub issue_url: &'a str,
+}
+
 /// Create a new task: git branch + worktree + DB row.
 pub fn create(
     db: &Connection,
     repo_root: &Path,
-    name: &str,
-    description: &str,
+    opts: &CreateOpts,
 ) -> Result<Task> {
+    let name = opts.name;
+    let description = opts.description;
     // Validate name: no spaces, no slashes, reasonable length
     if name.is_empty() {
         bail!("task name cannot be empty");
@@ -112,8 +124,9 @@ pub fn create(
 
     // Insert into database
     db.execute(
-        "INSERT INTO tasks (name, description, branch, worktree) VALUES (?1, ?2, ?3, ?4)",
-        params![name, description, branch, worktree_str],
+        "INSERT INTO tasks (name, description, prompt, issue_url, branch, worktree)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![name, description, opts.prompt, opts.issue_url, branch, worktree_str],
     )
     .with_context(|| format!("failed to insert task '{}'", name))?;
 
@@ -124,7 +137,7 @@ pub fn create(
 /// List all tasks, ordered by creation time.
 pub fn list(db: &Connection) -> Result<Vec<Task>> {
     let mut stmt = db.prepare(
-        "SELECT id, name, description, branch, worktree, status,
+        "SELECT id, name, description, prompt, issue_url, branch, worktree, status,
                 session_id, tmux_session, pid, created_at, updated_at
          FROM tasks ORDER BY created_at ASC",
     )?;
@@ -139,7 +152,7 @@ pub fn list(db: &Connection) -> Result<Vec<Task>> {
 /// Get a task by ID.
 pub fn get(db: &Connection, id: i64) -> Result<Option<Task>> {
     let mut stmt = db.prepare(
-        "SELECT id, name, description, branch, worktree, status,
+        "SELECT id, name, description, prompt, issue_url, branch, worktree, status,
                 session_id, tmux_session, pid, created_at, updated_at
          FROM tasks WHERE id = ?1",
     )?;
@@ -151,7 +164,7 @@ pub fn get(db: &Connection, id: i64) -> Result<Option<Task>> {
 /// Get a task by name.
 pub fn get_by_name(db: &Connection, name: &str) -> Result<Option<Task>> {
     let mut stmt = db.prepare(
-        "SELECT id, name, description, branch, worktree, status,
+        "SELECT id, name, description, prompt, issue_url, branch, worktree, status,
                 session_id, tmux_session, pid, created_at, updated_at
          FROM tasks WHERE name = ?1",
     )?;
@@ -219,10 +232,10 @@ pub fn set_running(
 use rusqlite::OptionalExtension;
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
-    let status_str: String = row.get(5)?;
+    let status_str: String = row.get(7)?;
     let status = Status::from_str(&status_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
-            5,
+            7,
             rusqlite::types::Type::Text,
             Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
         )
@@ -232,14 +245,16 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         id: row.get(0)?,
         name: row.get(1)?,
         description: row.get(2)?,
-        branch: row.get(3)?,
-        worktree: row.get(4)?,
+        prompt: row.get(3)?,
+        issue_url: row.get(4)?,
+        branch: row.get(5)?,
+        worktree: row.get(6)?,
         status,
-        session_id: row.get(6)?,
-        tmux_session: row.get(7)?,
-        pid: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        session_id: row.get(8)?,
+        tmux_session: row.get(9)?,
+        pid: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -280,21 +295,33 @@ mod tests {
         (repo, db)
     }
 
+    fn opts<'a>(name: &'a str, desc: &'a str) -> CreateOpts<'a> {
+        CreateOpts {
+            name,
+            description: desc,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn create_and_get() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), "fix-bug", "Fix the login bug").unwrap();
+        let task = create(&db, repo.path(), &CreateOpts {
+            name: "fix-bug",
+            description: "Fix the login bug",
+            prompt: "find and fix the login timeout",
+            issue_url: "https://linear.app/123",
+        }).unwrap();
 
         assert_eq!(task.name, "fix-bug");
         assert_eq!(task.description, "Fix the login bug");
+        assert_eq!(task.prompt, "find and fix the login timeout");
+        assert_eq!(task.issue_url, "https://linear.app/123");
         assert_eq!(task.branch, "pit/fix-bug");
         assert_eq!(task.status, Status::Idle);
         assert!(task.worktree.contains("fix-bug"));
-
-        // Worktree should exist on disk
         assert!(Path::new(&task.worktree).exists());
 
-        // Git branch should exist
         let output = StdCommand::new("git")
             .args(["branch", "--list", "pit/fix-bug"])
             .current_dir(repo.path())
@@ -306,7 +333,7 @@ mod tests {
     #[test]
     fn create_rejects_empty_name() {
         let (repo, db) = setup();
-        let result = create(&db, repo.path(), "", "desc");
+        let result = create(&db, repo.path(), &opts("", "desc"));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
     }
@@ -314,7 +341,7 @@ mod tests {
     #[test]
     fn create_rejects_invalid_chars() {
         let (repo, db) = setup();
-        let result = create(&db, repo.path(), "has spaces", "desc");
+        let result = create(&db, repo.path(), &opts("has spaces", "desc"));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("alphanumeric"));
     }
@@ -322,17 +349,17 @@ mod tests {
     #[test]
     fn create_rejects_duplicate_name() {
         let (repo, db) = setup();
-        create(&db, repo.path(), "task-1", "").unwrap();
-        let result = create(&db, repo.path(), "task-1", "");
+        create(&db, repo.path(), &opts("task-1", "")).unwrap();
+        let result = create(&db, repo.path(), &opts("task-1", ""));
         assert!(result.is_err());
     }
 
     #[test]
     fn list_returns_all_tasks() {
         let (repo, db) = setup();
-        create(&db, repo.path(), "task-a", "").unwrap();
-        create(&db, repo.path(), "task-b", "").unwrap();
-        create(&db, repo.path(), "task-c", "").unwrap();
+        create(&db, repo.path(), &opts("task-a", "")).unwrap();
+        create(&db, repo.path(), &opts("task-b", "")).unwrap();
+        create(&db, repo.path(), &opts("task-c", "")).unwrap();
 
         let tasks = list(&db).unwrap();
         assert_eq!(tasks.len(), 3);
@@ -351,7 +378,7 @@ mod tests {
     #[test]
     fn get_by_name_works() {
         let (repo, db) = setup();
-        create(&db, repo.path(), "my-task", "hello").unwrap();
+        create(&db, repo.path(), &opts("my-task", "hello")).unwrap();
 
         let task = get_by_name(&db, "my-task").unwrap().unwrap();
         assert_eq!(task.name, "my-task");
@@ -364,19 +391,15 @@ mod tests {
     #[test]
     fn delete_removes_everything() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), "doomed", "").unwrap();
+        let task = create(&db, repo.path(), &opts("doomed", "")).unwrap();
         let worktree_path = task.worktree.clone();
         let task_id = task.id;
 
         delete(&db, repo.path(), task_id).unwrap();
 
-        // DB row gone
         assert!(get(&db, task_id).unwrap().is_none());
-
-        // Worktree directory gone
         assert!(!Path::new(&worktree_path).exists());
 
-        // Git branch gone
         let output = StdCommand::new("git")
             .args(["branch", "--list", "pit/doomed"])
             .current_dir(repo.path())
@@ -388,7 +411,7 @@ mod tests {
     #[test]
     fn delete_rejects_running_task() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), "busy", "").unwrap();
+        let task = create(&db, repo.path(), &opts("busy", "")).unwrap();
         set_status(&db, task.id, &Status::Running).unwrap();
 
         let result = delete(&db, repo.path(), task.id);
@@ -399,21 +422,19 @@ mod tests {
     #[test]
     fn set_status_works() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), "flip", "").unwrap();
+        let task = create(&db, repo.path(), &opts("flip", "")).unwrap();
 
         set_status(&db, task.id, &Status::Running).unwrap();
-        let t = get(&db, task.id).unwrap().unwrap();
-        assert_eq!(t.status, Status::Running);
+        assert_eq!(get(&db, task.id).unwrap().unwrap().status, Status::Running);
 
         set_status(&db, task.id, &Status::Done).unwrap();
-        let t = get(&db, task.id).unwrap().unwrap();
-        assert_eq!(t.status, Status::Done);
+        assert_eq!(get(&db, task.id).unwrap().unwrap().status, Status::Done);
     }
 
     #[test]
     fn set_running_stores_tmux_info() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), "runner", "").unwrap();
+        let task = create(&db, repo.path(), &opts("runner", "")).unwrap();
 
         set_running(&db, task.id, "pit-runner", Some(12345), Some("sess-abc")).unwrap();
 

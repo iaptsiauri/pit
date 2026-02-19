@@ -30,6 +30,12 @@ enum Commands {
         /// Description of what the agent should do
         #[arg(short, long, default_value = "")]
         description: String,
+        /// Prompt to send to the agent on first launch
+        #[arg(short, long, default_value = "")]
+        prompt: String,
+        /// Link to an issue (GitHub, Linear, etc.)
+        #[arg(short, long, default_value = "")]
+        issue: String,
     },
 
     /// List all tasks
@@ -71,7 +77,12 @@ fn main() -> Result<()> {
     match cli.command {
         None => cmd_dashboard()?,
         Some(Commands::Init) => cmd_init()?,
-        Some(Commands::New { name, description }) => cmd_new(&name, &description)?,
+        Some(Commands::New {
+            name,
+            description,
+            prompt,
+            issue,
+        }) => cmd_new(&name, &description, &prompt, &issue)?,
         Some(Commands::List) => cmd_list()?,
         Some(Commands::Status) => cmd_status()?,
         Some(Commands::Run { name }) => cmd_run(&name)?,
@@ -96,11 +107,23 @@ fn cmd_init() -> Result<()> {
     Ok(())
 }
 
-fn cmd_new(name: &str, description: &str) -> Result<()> {
+fn cmd_new(name: &str, description: &str, prompt: &str, issue: &str) -> Result<()> {
     let project = open_project()?;
-    let t = task::create(&project.db, &project.repo_root, name, description)?;
+    let t = task::create(
+        &project.db,
+        &project.repo_root,
+        &task::CreateOpts {
+            name,
+            description,
+            prompt,
+            issue_url: issue,
+        },
+    )?;
     println!("Created task '{}' on branch '{}'", t.name, t.branch);
     println!("  worktree: {}", t.worktree);
+    if !t.prompt.is_empty() {
+        println!("  prompt: {}", t.prompt);
+    }
     Ok(())
 }
 
@@ -170,11 +193,17 @@ fn cmd_run(name: &str) -> Result<()> {
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let claude_cmd = if t.session_id.is_some() {
+    let mut claude_cmd = if t.session_id.is_some() {
         format!("claude -r {}", session_id)
     } else {
         format!("claude --session-id {}", session_id)
     };
+
+    // Pass prompt on first launch
+    if t.session_id.is_none() && !t.prompt.is_empty() {
+        let escaped = t.prompt.replace('\'', "'\\''");
+        claude_cmd.push_str(&format!(" -p '{}'", escaped));
+    }
 
     tmux::create_session(&tmux_name, &t.worktree)?;
     tmux::send_keys(&tmux_name, &[&claude_cmd, "Enter"])?;

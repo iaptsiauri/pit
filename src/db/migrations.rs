@@ -3,7 +3,10 @@ use rusqlite::Connection;
 
 /// Each migration is a (version, description, sql) tuple.
 /// Migrations are applied in order. The `schema_version` table tracks which have run.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(1, "initial schema", MIGRATION_001)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "initial schema", MIGRATION_001),
+    (2, "add prompt and issue_url", MIGRATION_002),
+];
 
 const MIGRATION_001: &str = "
 CREATE TABLE tasks (
@@ -20,6 +23,11 @@ CREATE TABLE tasks (
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+const MIGRATION_002: &str = "
+ALTER TABLE tasks ADD COLUMN prompt TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN issue_url TEXT NOT NULL DEFAULT '';
 ";
 
 /// Run all pending migrations inside a transaction.
@@ -69,7 +77,7 @@ mod tests {
         let version: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]
