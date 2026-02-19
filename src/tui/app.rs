@@ -742,10 +742,8 @@ impl App {
                         issue.identifier, issue.title, issue.state
                     ));
 
-                    // Auto-fill prompt if empty
-                    if self.modal.prompt.is_empty() {
-                        self.modal.prompt = crate::core::linear::issue_to_prompt(&issue);
-                    }
+                    // Fill prompt from issue title + description
+                    self.modal.prompt = crate::core::linear::issue_to_prompt(&issue);
 
                     // Auto-fill name if it's still the generated default
                     let slug: String = issue.identifier.to_lowercase().replace(' ', "-");
@@ -2229,7 +2227,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_enter_does_not_overwrite_prompt() {
+    fn picker_enter_overwrites_prompt_with_issue() {
         let mut app = make_app(vec![]);
         app.mode = Mode::IssuePicker;
         app.modal.prompt = "my existing prompt".to_string();
@@ -2244,7 +2242,9 @@ mod tests {
         app.modal.picker_selected = 0;
 
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.prompt, "my existing prompt");
+        assert!(app.modal.prompt.contains("X-1"));
+        assert!(app.modal.prompt.contains("Thing"));
+        assert!(app.modal.prompt.contains("Desc"));
     }
 
     #[test]
