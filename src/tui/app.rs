@@ -332,7 +332,15 @@ impl App {
 
         match self.focus {
             Pane::TaskList => self.handle_tasklist_key(code, modifiers),
-            Pane::Detail => self.handle_detail_key(code, modifiers),
+            Pane::Detail => {
+                let result = self.handle_detail_key(code, modifiers);
+                // Auto-scroll only when cursor is on a file/diff line
+                // (PageDown/PageUp do manual scroll without cursor)
+                if self.file_cursor.is_some() {
+                    self.scroll_detail_to_cursor(self.detail_pane_height);
+                }
+                result
+            }
         }
     }
 
@@ -1080,12 +1088,12 @@ pub fn run(project: &Project) -> Result<()> {
 
 fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
-        terminal.draw(|frame| ui::draw(frame, app))?;
-
-        // Auto-scroll detail pane to keep cursor visible
-        if app.focus == Pane::Detail {
+        // Auto-scroll detail pane to keep cursor visible (before draw)
+        if app.focus == Pane::Detail && app.file_cursor.is_some() {
             app.scroll_detail_to_cursor(app.detail_pane_height);
         }
+
+        terminal.draw(|frame| ui::draw(frame, app))?;
 
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {

@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::core::task::Status;
@@ -172,11 +172,21 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
         Span::styled(&task.branch, Style::default().fg(Color::Cyan)),
     ]));
 
-    // Prompt (if set)
+    // Prompt (if set) — show first line, truncated to pane width
     if !task.prompt.is_empty() {
+        let first_line = task.prompt.lines().next().unwrap_or("");
+        let truncated: String = first_line.chars().take(w.saturating_sub(10)).collect();
+        let suffix = if task.prompt.contains('\n') || first_line.len() > w.saturating_sub(10) {
+            "…"
+        } else {
+            ""
+        };
         lines.push(Line::from(vec![
             Span::styled("prompt: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&task.prompt, Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{}{}", truncated, suffix),
+                Style::default().fg(Color::Gray),
+            ),
         ]));
     }
 
@@ -378,9 +388,14 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
         )));
     }
 
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((app.detail_scroll, 0));
+    // Manually scroll by skipping lines (no Wrap — each Line = one visual row).
+    // This keeps cursor_visual_line() math in sync with what's rendered.
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .skip(app.detail_scroll as usize)
+        .take(inner.height as usize)
+        .collect();
+    let paragraph = Paragraph::new(visible);
     frame.render_widget(paragraph, inner);
 }
 
