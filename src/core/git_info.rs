@@ -31,29 +31,75 @@ pub struct TaskGitInfo {
 
 /// Get the diff for a single file between main and branch.
 /// Returns the diff output as lines (without the diff header noise).
-pub fn file_diff(repo_root: &Path, branch: &str, file_path: &str) -> Vec<String> {
+/// Get the diff for a specific file, including uncommitted worktree changes.
+pub fn file_diff_with_worktree(
+    repo_root: &Path,
+    branch: &str,
+    file_path: &str,
+    worktree: Option<&Path>,
+) -> Vec<String> {
     let main = match detect_main_branch(repo_root) {
         Ok(m) => m,
         Err(_) => return vec![],
     };
 
+    // Committed diff: main...branch
     let range = format!("{}...{}", main, branch);
-    let output = match Command::new("git")
+    let committed = Command::new("git")
         .args(["diff", &range, "--", file_path])
         .current_dir(repo_root)
         .output()
-    {
-        Ok(o) => o,
-        Err(_) => return vec![],
-    };
+        .ok();
 
-    if !output.status.success() {
-        return vec![];
+    // Uncommitted diff: HEAD in the worktree
+    let uncommitted = worktree.and_then(|wt| {
+        Command::new("git")
+            .args(["diff", "HEAD", "--", file_path])
+            .current_dir(wt)
+            .output()
+            .ok()
+    });
+
+    // Combine both outputs
+    let mut all_lines = String::new();
+    if let Some(ref o) = committed {
+        if o.status.success() {
+            all_lines.push_str(&String::from_utf8_lossy(&o.stdout));
+        }
+    }
+    if let Some(ref o) = uncommitted {
+        if o.status.success() {
+            let s = String::from_utf8_lossy(&o.stdout);
+            if !s.trim().is_empty() {
+                if !all_lines.is_empty() {
+                    all_lines.push('\n');
+                }
+                all_lines.push_str(&s);
+            }
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Skip the header lines (diff --git, index, ---, +++) and just show hunks
-    stdout
+    // For untracked files, show the whole content as additions
+    if all_lines.is_empty() {
+        if let Some(wt) = worktree {
+            let full_path = wt.join(file_path);
+            if full_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    let mut lines = vec![format!(
+                        "@@ -0,0 +1,{} @@ (new file)",
+                        content.lines().count()
+                    )];
+                    for l in content.lines() {
+                        lines.push(format!("+{}", l));
+                    }
+                    return lines;
+                }
+            }
+        }
+    }
+
+    // Skip diff headers, just show hunks
+    all_lines
         .lines()
         .skip_while(|line| {
             line.starts_with("diff --git")
@@ -87,15 +133,39 @@ fn detect_main_branch(repo_root: &Path) -> Result<String> {
 }
 
 /// Gather git log and diff stat for a task branch.
-pub fn gather(repo_root: &Path, branch: &str) -> TaskGitInfo {
+/// Gather git info, including uncommitted changes from a worktree.
+pub fn gather_with_worktree(
+    repo_root: &Path,
+    branch: &str,
+    worktree: Option<&Path>,
+) -> TaskGitInfo {
     let main = match detect_main_branch(repo_root) {
         Ok(m) => m,
         Err(_) => return TaskGitInfo::default(),
     };
 
     let commits = gather_commits(repo_root, &main, branch).unwrap_or_default();
-    let (files, total_ins, total_del) =
+    let (mut files, mut total_ins, mut total_del) =
         gather_diff_stat(repo_root, &main, branch).unwrap_or_default();
+
+    // Also include uncommitted changes from the worktree (staged + unstaged)
+    if let Some(wt) = worktree {
+        if let Ok((wt_files, _wt_ins, _wt_del)) = gather_worktree_changes(wt) {
+            for wf in wt_files {
+                // Merge: if file already in committed diff, add the extra changes
+                if let Some(existing) = files.iter_mut().find(|f| f.path == wf.path) {
+                    existing.insertions += wf.insertions;
+                    existing.deletions += wf.deletions;
+                    total_ins += wf.insertions;
+                    total_del += wf.deletions;
+                } else {
+                    total_ins += wf.insertions;
+                    total_del += wf.deletions;
+                    files.push(wf);
+                }
+            }
+        }
+    }
 
     TaskGitInfo {
         commits,
@@ -103,6 +173,73 @@ pub fn gather(repo_root: &Path, branch: &str) -> TaskGitInfo {
         total_insertions: total_ins,
         total_deletions: total_del,
     }
+}
+
+/// Get uncommitted changes (staged + unstaged) in a worktree.
+fn gather_worktree_changes(worktree: &Path) -> Result<(Vec<FileStat>, u32, u32)> {
+    // git diff HEAD --numstat shows all uncommitted changes (staged + unstaged)
+    let output = Command::new("git")
+        .args(["diff", "HEAD", "--numstat"])
+        .current_dir(worktree)
+        .output()
+        .context("failed to run git diff HEAD")?;
+
+    if !output.status.success() {
+        return Ok((vec![], 0, 0));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut files = Vec::new();
+    let mut total_ins = 0u32;
+    let mut total_del = 0u32;
+
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split('\t');
+        let ins_str = parts.next().unwrap_or("0");
+        let del_str = parts.next().unwrap_or("0");
+        let path = parts.next().unwrap_or("").to_string();
+
+        let insertions = ins_str.parse::<u32>().unwrap_or(0);
+        let deletions = del_str.parse::<u32>().unwrap_or(0);
+
+        total_ins += insertions;
+        total_del += deletions;
+
+        files.push(FileStat {
+            path,
+            insertions,
+            deletions,
+        });
+    }
+
+    // Also include untracked files
+    let output = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(worktree)
+        .output();
+
+    if let Ok(o) = output {
+        if o.status.success() {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            for path in stdout.lines().filter(|l| !l.is_empty()) {
+                // Count lines in new file
+                let line_count = std::fs::read_to_string(worktree.join(path))
+                    .map(|s| s.lines().count() as u32)
+                    .unwrap_or(0);
+                total_ins += line_count;
+                files.push(FileStat {
+                    path: path.to_string(),
+                    insertions: line_count,
+                    deletions: 0,
+                });
+            }
+        }
+    }
+
+    Ok((files, total_ins, total_del))
 }
 
 /// Get recent commits on `branch` that are not on `main`.
@@ -279,7 +416,7 @@ mod tests {
     #[test]
     fn gather_returns_commits_and_files() {
         let (repo, branch) = make_repo_with_branch();
-        let info = gather(repo.path(), &branch);
+        let info = gather_with_worktree(repo.path(), &branch, None);
 
         assert_eq!(info.commits.len(), 2);
         assert_eq!(info.commits[0].message, "Add print and test");
@@ -333,7 +470,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let info = gather(p, "pit/empty-task");
+        let info = gather_with_worktree(p, "pit/empty-task", None);
         assert!(info.commits.is_empty());
         assert!(info.files.is_empty());
         assert_eq!(info.total_insertions, 0);
@@ -371,7 +508,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let info = gather(p, "pit/does-not-exist");
+        let info = gather_with_worktree(p, "pit/does-not-exist", None);
         assert!(info.commits.is_empty());
         assert!(info.files.is_empty());
     }
@@ -414,7 +551,7 @@ mod tests {
     #[test]
     fn commit_fields_populated() {
         let (repo, branch) = make_repo_with_branch();
-        let info = gather(repo.path(), &branch);
+        let info = gather_with_worktree(repo.path(), &branch, None);
 
         for c in &info.commits {
             assert_eq!(c.hash.len(), 7, "short hash should be 7 chars: {}", c.hash);
@@ -426,7 +563,7 @@ mod tests {
     #[test]
     fn file_stat_has_insertions_deletions() {
         let (repo, branch) = make_repo_with_branch();
-        let info = gather(repo.path(), &branch);
+        let info = gather_with_worktree(repo.path(), &branch, None);
 
         let src = info.files.iter().find(|f| f.path == "src.rs").unwrap();
         assert!(src.insertions > 0, "src.rs should have insertions");
@@ -438,7 +575,7 @@ mod tests {
     #[test]
     fn file_diff_returns_hunks() {
         let (repo, branch) = make_repo_with_branch();
-        let lines = file_diff(repo.path(), &branch, "src.rs");
+        let lines = file_diff_with_worktree(repo.path(), &branch, "src.rs", None);
 
         assert!(!lines.is_empty(), "should have diff lines");
         // First line should be a hunk header
@@ -457,7 +594,7 @@ mod tests {
     #[test]
     fn file_diff_new_file() {
         let (repo, branch) = make_repo_with_branch();
-        let lines = file_diff(repo.path(), &branch, "test.rs");
+        let lines = file_diff_with_worktree(repo.path(), &branch, "test.rs", None);
 
         assert!(!lines.is_empty());
         assert!(lines.iter().any(|l| l.starts_with('+')));
@@ -466,14 +603,14 @@ mod tests {
     #[test]
     fn file_diff_nonexistent_file() {
         let (repo, branch) = make_repo_with_branch();
-        let lines = file_diff(repo.path(), &branch, "nope.rs");
+        let lines = file_diff_with_worktree(repo.path(), &branch, "nope.rs", None);
         assert!(lines.is_empty());
     }
 
     #[test]
     fn file_diff_nonexistent_branch() {
         let (repo, _) = make_repo_with_branch();
-        let lines = file_diff(repo.path(), "pit/nope", "src.rs");
+        let lines = file_diff_with_worktree(repo.path(), "pit/nope", "src.rs", None);
         assert!(lines.is_empty());
     }
 }

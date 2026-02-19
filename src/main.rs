@@ -84,6 +84,30 @@ enum Commands {
         name: String,
     },
 
+    /// Save a checkpoint of a task's current state
+    Checkpoint {
+        /// Task name
+        name: String,
+    },
+
+    /// Rollback a task to the last checkpoint (or a specific one)
+    Rollback {
+        /// Task name
+        name: String,
+        /// Checkpoint number to rollback to (default: latest)
+        #[arg(short, long)]
+        to: Option<usize>,
+    },
+
+    /// Watch live output from a running task
+    Watch {
+        /// Task name
+        name: String,
+        /// Number of lines to show (default 30)
+        #[arg(short = 'n', long, default_value = "30")]
+        lines: usize,
+    },
+
     /// Manage configuration (API keys, preferences)
     Config {
         #[command(subcommand)]
@@ -137,6 +161,9 @@ fn main() -> Result<()> {
         Some(Commands::Diff { name }) => cmd_diff(&name)?,
         Some(Commands::Shell { name }) => cmd_shell(&name)?,
         Some(Commands::Delete { name }) => cmd_delete(&name)?,
+        Some(Commands::Checkpoint { name }) => cmd_checkpoint(&name)?,
+        Some(Commands::Rollback { name, to }) => cmd_rollback(&name, to)?,
+        Some(Commands::Watch { name, lines }) => cmd_watch(&name, lines)?,
         Some(Commands::Config { action }) => cmd_config(action)?,
     }
 
@@ -325,6 +352,93 @@ fn cmd_diff(name: &str) -> Result<()> {
         if !output.success() {
             anyhow::bail!("git diff failed");
         }
+    }
+
+    Ok(())
+}
+
+fn cmd_checkpoint(name: &str) -> Result<()> {
+    let project = open_project()?;
+    let t = task::get_by_name(&project.db, name)?
+        .ok_or_else(|| anyhow::anyhow!("task '{}' not found", name))?;
+
+    let idx = core::checkpoint::create(&project.repo_root, &t.name, &t.branch)?;
+
+    // List all checkpoints to show context
+    let checkpoints = core::checkpoint::list(&project.repo_root, &t.name)?;
+    println!("✓ Checkpoint #{} saved for '{}'", idx, name);
+    for cp in &checkpoints {
+        let marker = if cp.index == idx { " ←" } else { "" };
+        println!(
+            "  #{}: {} {}  {}{}",
+            cp.index, cp.commit_hash, cp.message, cp.timestamp, marker
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_rollback(name: &str, target: Option<usize>) -> Result<()> {
+    let project = open_project()?;
+    let t = task::get_by_name(&project.db, name)?
+        .ok_or_else(|| anyhow::anyhow!("task '{}' not found", name))?;
+
+    if t.status == task::Status::Running {
+        anyhow::bail!(
+            "task '{}' is running — stop it first before rolling back",
+            name
+        );
+    }
+
+    let worktree = std::path::Path::new(&t.worktree);
+    let idx = core::checkpoint::rollback(&project.repo_root, &t.name, worktree, target)?;
+    println!("✓ Rolled back '{}' to checkpoint #{}", name, idx);
+
+    Ok(())
+}
+
+fn cmd_watch(name: &str, num_lines: usize) -> Result<()> {
+    let project = open_project()?;
+    let t = task::get_by_name(&project.db, name)?
+        .ok_or_else(|| anyhow::anyhow!("task '{}' not found", name))?;
+
+    if t.status != task::Status::Running {
+        anyhow::bail!("task '{}' is not running (status: {})", name, t.status);
+    }
+
+    let tmux_name = t
+        .tmux_session
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("task '{}' has no tmux session", name))?;
+
+    // Stream output in a loop until Ctrl-C
+    println!("Watching '{}' (Ctrl-C to stop)\n", name);
+
+    loop {
+        // Clear screen and move cursor to top
+        print!("\x1b[2J\x1b[H");
+        println!(
+            "\x1b[1;33m{}\x1b[0m  \x1b[32m▶ running\x1b[0m  (Ctrl-C to stop)\n",
+            name
+        );
+
+        match tmux::capture_pane(tmux_name, num_lines) {
+            Ok(output) => {
+                print!("{}", output);
+            }
+            Err(_) => {
+                println!("\x1b[31m(session ended)\x1b[0m");
+                break;
+            }
+        }
+
+        // Check if session is still alive
+        if !tmux::session_exists(tmux_name) {
+            println!("\n\x1b[33m(agent exited)\x1b[0m");
+            break;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
     Ok(())

@@ -1,3 +1,4 @@
+pub mod checkpoint;
 pub mod config;
 pub mod git_info;
 #[allow(dead_code)]

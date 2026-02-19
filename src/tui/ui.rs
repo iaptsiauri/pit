@@ -229,8 +229,51 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
     // Store the scrollable body height for auto-scroll calculations
     app.detail_pane_height = body_area.height;
 
-    // ── Scrollable body (git info) ──
+    // ── Scrollable body ──
     let mut lines: Vec<Line> = Vec::new();
+
+    // ── Live output (when enabled and task is running) ──
+    if app.show_live_output && !app.live_output.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "── Live Output ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "─".repeat(w.saturating_sub(15)),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        for ol in &app.live_output {
+            let truncated: String = ol.chars().take(w).collect();
+            lines.push(Line::from(Span::styled(
+                format!("  {}", truncated),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        lines.push(Line::from(""));
+    } else if app.show_live_output {
+        // Enabled but no output (task not running or no tmux session)
+        lines.push(Line::from(vec![
+            Span::styled(
+                "── Live Output ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "─".repeat(w.saturating_sub(15)),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "  (no output — task not running)",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(""));
+    }
 
     // ── Git info ──
     if let Some(ref info) = app.detail {
@@ -1488,6 +1531,25 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":kanban  "),
+            Span::styled(
+                "w",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":watch  "),
+            Span::styled(
+                "c",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":save  "),
+            Span::styled(
+                "R",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":rollback  "),
             Span::styled(
                 "n",
                 Style::default()

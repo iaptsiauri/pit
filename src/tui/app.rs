@@ -3,6 +3,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 use std::time::Duration;
 
+use crate::core::checkpoint;
 use crate::core::git_info::{self, TaskGitInfo};
 use crate::core::names;
 use crate::core::project::Project;
@@ -178,6 +179,10 @@ pub struct App {
     pub kanban_row: [usize; 3],
     /// Cached detail pane inner height (set during render).
     pub detail_pane_height: u16,
+    /// Whether live output is shown in the detail pane.
+    pub show_live_output: bool,
+    /// Cached live output lines from tmux capture-pane.
+    pub live_output: Vec<String>,
 }
 
 impl App {
@@ -205,6 +210,8 @@ impl App {
             kanban_col: 0,
             kanban_row: [0, 0, 0],
             detail_pane_height: 30,
+            show_live_output: false,
+            live_output: Vec::new(),
         };
         app.refresh_detail();
         Ok(app)
@@ -235,9 +242,53 @@ impl App {
         self.expanded_files.clear();
         self.file_diffs.clear();
         if let Some(task) = self.tasks.get(self.selected) {
-            self.detail = Some(git_info::gather(&self.repo_root, &task.branch));
+            let worktree = std::path::Path::new(&task.worktree);
+            self.detail = Some(git_info::gather_with_worktree(
+                &self.repo_root,
+                &task.branch,
+                Some(worktree),
+            ));
         } else {
             self.detail = None;
+        }
+    }
+
+    /// Capture live output from the selected task's tmux session.
+    fn refresh_live_output(&mut self) {
+        if !self.show_live_output {
+            return;
+        }
+        let task = match self.tasks.get(self.selected) {
+            Some(t) => t,
+            None => {
+                self.live_output.clear();
+                return;
+            }
+        };
+        if task.status != task::Status::Running {
+            self.live_output.clear();
+            return;
+        }
+        let tmux_name = match &task.tmux_session {
+            Some(n) => n.clone(),
+            None => {
+                self.live_output.clear();
+                return;
+            }
+        };
+        match tmux::capture_pane(&tmux_name, 50) {
+            Ok(output) => {
+                // Trim trailing blank lines, keep meaningful content
+                let lines: Vec<String> = output.lines().map(|l| l.to_string()).collect();
+                let last_non_empty = lines
+                    .iter()
+                    .rposition(|l| !l.trim().is_empty())
+                    .unwrap_or(0);
+                self.live_output = lines[..=last_non_empty].to_vec();
+            }
+            Err(_) => {
+                self.live_output.clear();
+            }
         }
     }
 
@@ -291,6 +342,15 @@ impl App {
                     View::List => View::Kanban,
                     View::Kanban => View::List,
                 };
+                return Ok(Action::None);
+            }
+            (KeyCode::Char('w'), _) => {
+                self.show_live_output = !self.show_live_output;
+                if self.show_live_output {
+                    self.refresh_live_output();
+                } else {
+                    self.live_output.clear();
+                }
                 return Ok(Action::None);
             }
             _ => {}
@@ -492,7 +552,13 @@ impl App {
         }
         if let (Some(task), Some(info)) = (self.tasks.get(self.selected), self.detail.as_ref()) {
             if let Some(file) = info.files.get(idx) {
-                let diff = git_info::file_diff(&self.repo_root, &task.branch, &file.path);
+                let worktree = std::path::Path::new(&task.worktree);
+                let diff = git_info::file_diff_with_worktree(
+                    &self.repo_root,
+                    &task.branch,
+                    &file.path,
+                    Some(worktree),
+                );
                 self.file_diffs.insert(idx, diff);
             }
         }
@@ -507,8 +573,19 @@ impl App {
             None => return 0,
         };
 
-        // Body starts with: commits header, commits, blank, files header
+        // Body starts with optional live output, then commits, files
         let mut line: usize = 0;
+
+        // Account for live output section if shown
+        if self.show_live_output {
+            line += 1; // "── Live Output ──"
+            if self.live_output.is_empty() {
+                line += 1; // "(no output — task not running)"
+            } else {
+                line += self.live_output.len();
+            }
+            line += 1; // blank after section
+        }
 
         // Commits header + commits + blank
         line += 1; // "── Commits (N) ──"
@@ -733,6 +810,39 @@ impl App {
                 } else {
                     Ok(Action::None)
                 }
+            }
+            (KeyCode::Char('c'), _) => {
+                if let Some(t) = self.tasks.get(self.selected) {
+                    match checkpoint::create(&self.repo_root, &t.name, &t.branch) {
+                        Ok(idx) => {
+                            self.error = Some(format!("✓ Checkpoint #{} saved", idx));
+                            self.force_refresh_detail();
+                        }
+                        Err(e) => {
+                            self.error = Some(format!("Checkpoint failed: {}", e));
+                        }
+                    }
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Char('R'), _) => {
+                if let Some(t) = self.tasks.get(self.selected) {
+                    if t.status == task::Status::Running {
+                        self.error = Some("Stop the task before rolling back".into());
+                    } else {
+                        let worktree = std::path::Path::new(&t.worktree);
+                        match checkpoint::rollback(&self.repo_root, &t.name, worktree, None) {
+                            Ok(idx) => {
+                                self.error = Some(format!("✓ Rolled back to checkpoint #{}", idx));
+                                self.force_refresh_detail();
+                            }
+                            Err(e) => {
+                                self.error = Some(format!("Rollback failed: {}", e));
+                            }
+                        }
+                    }
+                }
+                Ok(Action::None)
             }
             _ => Ok(Action::None),
         }
@@ -1135,6 +1245,7 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             return Ok(());
         }
 
+        app.refresh_live_output();
         app.refresh()?;
     }
 }
@@ -1353,6 +1464,8 @@ mod tests {
             kanban_col: 0,
             kanban_row: [0, 0, 0],
             detail_pane_height: 30,
+            show_live_output: false,
+            live_output: Vec::new(),
         }
     }
 
@@ -2883,5 +2996,49 @@ mod tests {
         assert_eq!(app.kanban_column_tasks(0).len(), 2); // idle
         assert_eq!(app.kanban_column_tasks(1).len(), 1); // running
         assert_eq!(app.kanban_column_tasks(2).len(), 1); // done
+    }
+
+    // ── Live output tests ──
+
+    #[test]
+    fn w_toggles_live_output() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Running)]);
+        assert!(!app.show_live_output);
+
+        app.handle_key(KeyCode::Char('w'), KeyModifiers::NONE)
+            .unwrap();
+        assert!(app.show_live_output);
+
+        app.handle_key(KeyCode::Char('w'), KeyModifiers::NONE)
+            .unwrap();
+        assert!(!app.show_live_output);
+    }
+
+    #[test]
+    fn cursor_visual_line_accounts_for_live_output() {
+        let mut app = make_app_with_files(
+            vec![make_task(1, "a", task::Status::Running)],
+            sample_files(),
+        );
+        app.focus = Pane::Detail;
+        app.file_cursor = Some(0);
+
+        let line_without = app.cursor_visual_line();
+
+        // Enable live output with some content
+        app.show_live_output = true;
+        app.live_output = vec!["line1".into(), "line2".into(), "line3".into()];
+
+        let line_with = app.cursor_visual_line();
+        // Should be offset by: header(1) + 3 output lines + blank(1) = 5
+        assert_eq!(line_with, line_without + 5);
+    }
+
+    #[test]
+    fn live_output_empty_when_task_not_running() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.show_live_output = true;
+        app.refresh_live_output();
+        assert!(app.live_output.is_empty());
     }
 }
