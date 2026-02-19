@@ -211,7 +211,7 @@ fn cmd_run(name: &str) -> Result<()> {
 
     println!("Started task '{}' in background (tmux: {})", name, tmux_name);
     println!("  Attach with: tmux -L pit attach -t {}", tmux_name);
-    println!("  Detach with: Ctrl-] d");
+    println!("  Detach with: F1");
     Ok(())
 }
 

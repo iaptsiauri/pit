@@ -7,22 +7,35 @@ use std::process::Command;
 const SOCKET: &str = "pit";
 
 /// Tmux config for pit sessions.
-/// - Rebinds prefix to Ctrl-] so it doesn't conflict with Claude Code
-///   (Claude captures Ctrl-b, making the default tmux prefix unusable)
-/// - Shows a status bar reminder of the detach key
+///
+/// Claude Code opens /dev/tty in raw mode and consumes most key combos,
+/// making prefix-based tmux detach unreliable. Instead we bind detach
+/// directly to keys in tmux's root key table so tmux intercepts them
+/// at the PTY master level before the program ever sees them:
+///
+///   F1      → detach (single keypress, no prefix)
+///   C-\\    → detach (Ctrl-backslash, the SIGQUIT key — tmux grabs it first)
+///
+/// We also keep a prefix (C-]) for power users who want other tmux commands.
 const TMUX_CONF: &str = "\
-# pit tmux config — prefix is Ctrl-]
+# pit tmux config
+
+# Prefix for advanced tmux commands (rarely needed)
 unbind C-b
 set -g prefix C-]
 bind C-] send-prefix
-bind d detach-client
+
+# DETACH: bound directly in root table — no prefix needed
+# These fire instantly, tmux intercepts before the program sees them
+bind -n F1 detach-client
+bind -n C-\\\\ detach-client
 
 # Status bar with detach hint
 set -g status on
 set -g status-style 'bg=#1a1a2e,fg=#888888'
 set -g status-left '#[fg=#e0af68,bold] pit #[fg=#555555]│ '
 set -g status-left-length 20
-set -g status-right '#[fg=#555555]│ #[fg=#e0af68]Ctrl-] d#[fg=#888888] to detach '
+set -g status-right '#[fg=#555555]│ #[fg=#e0af68]F1#[fg=#888888] to detach '
 set -g status-right-length 40
 
 # Terminal settings
