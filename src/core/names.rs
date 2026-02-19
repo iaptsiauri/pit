@@ -1,16 +1,14 @@
 /// Generate a friendly random task name like "brisk-ember" or "swift-pixel".
 /// Avoids names already in `existing`.
-
 const ADJECTIVES: &[&str] = &[
-    "curious", "brisk", "mellow", "vivid", "bright", "calm", "daring", "eager",
-    "gentle", "keen", "lively", "nimble", "quiet", "rapid", "steady", "swift",
-    "tidy", "bold", "clever", "fresh",
+    "curious", "brisk", "mellow", "vivid", "bright", "calm", "daring", "eager", "gentle", "keen",
+    "lively", "nimble", "quiet", "rapid", "steady", "swift", "tidy", "bold", "clever", "fresh",
 ];
 
 const NOUNS: &[&str] = &[
-    "branch", "pixel", "thread", "anchor", "beacon", "circuit", "delta", "ember",
-    "harbor", "lantern", "meadow", "moment", "quill", "signal", "spark", "stride",
-    "trail", "vector", "weave", "whisper",
+    "branch", "pixel", "thread", "anchor", "beacon", "circuit", "delta", "ember", "harbor",
+    "lantern", "meadow", "moment", "quill", "signal", "spark", "stride", "trail", "vector",
+    "weave", "whisper",
 ];
 
 pub fn generate(existing: &[String]) -> String {
@@ -35,16 +33,19 @@ pub fn generate(existing: &[String]) -> String {
         }
     }
 
-    format!("task-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs())
+    format!(
+        "task-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    )
 }
 
 /// Simple fast random using system time as seed.
 fn fastrand() -> usize {
-    use std::time::SystemTime;
     use std::cell::Cell;
+    use std::time::SystemTime;
 
     thread_local! {
         static STATE: Cell<u64> = Cell::new(
@@ -75,7 +76,11 @@ mod tests {
         assert!(name.contains('-'), "name should have a hyphen: {}", name);
         let parts: Vec<&str> = name.splitn(2, '-').collect();
         assert_eq!(parts.len(), 2);
-        assert!(ADJECTIVES.contains(&parts[0]), "bad adjective: {}", parts[0]);
+        assert!(
+            ADJECTIVES.contains(&parts[0]),
+            "bad adjective: {}",
+            parts[0]
+        );
         assert!(NOUNS.contains(&parts[1]), "bad noun: {}", parts[1]);
     }
 

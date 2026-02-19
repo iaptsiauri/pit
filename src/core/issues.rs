@@ -1,6 +1,6 @@
 //! Unified issue fetching — dispatches to Linear or GitHub based on URL.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::github;
 use super::linear;
@@ -105,7 +105,10 @@ mod tests {
 
     #[test]
     fn detect_unknown() {
-        assert_eq!(detect_provider("https://jira.example.com/browse/X-1"), Provider::Unknown);
+        assert_eq!(
+            detect_provider("https://jira.example.com/browse/X-1"),
+            Provider::Unknown
+        );
         assert_eq!(detect_provider("not a url"), Provider::Unknown);
         assert_eq!(detect_provider(""), Provider::Unknown);
     }

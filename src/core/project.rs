@@ -94,7 +94,10 @@ fn ensure_gitignored(repo_root: &Path) -> Result<()> {
     let gitignore = repo_root.join(".gitignore");
     if gitignore.exists() {
         let content = std::fs::read_to_string(&gitignore)?;
-        if content.lines().any(|l| l.trim() == ".pit" || l.trim() == ".pit/") {
+        if content
+            .lines()
+            .any(|l| l.trim() == ".pit" || l.trim() == ".pit/")
+        {
             return Ok(());
         }
     }
@@ -196,7 +199,10 @@ mod tests {
         let repo = make_git_repo();
         let result = Project::open(repo.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not a pit project"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not a pit project"));
     }
 
     #[test]

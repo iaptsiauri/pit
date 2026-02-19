@@ -109,13 +109,7 @@ pub fn gather(repo_root: &Path, branch: &str) -> TaskGitInfo {
 fn gather_commits(repo_root: &Path, main: &str, branch: &str) -> Result<Vec<Commit>> {
     let range = format!("{}..{}", main, branch);
     let output = Command::new("git")
-        .args([
-            "log",
-            &range,
-            "--format=%h\t%s\t%cr",
-            "-n",
-            "20",
-        ])
+        .args(["log", &range, "--format=%h\t%s\t%cr", "-n", "20"])
         .current_dir(repo_root)
         .output()
         .context("failed to run git log")?;
@@ -255,7 +249,11 @@ mod tests {
             .output()
             .unwrap();
 
-        std::fs::write(p.join("src.rs"), "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+        std::fs::write(
+            p.join("src.rs"),
+            "fn main() {\n    println!(\"hello\");\n}\n",
+        )
+        .unwrap();
         std::fs::write(p.join("test.rs"), "fn test() {}\n").unwrap();
         StdCommand::new("git")
             .args(["add", "."])

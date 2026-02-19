@@ -242,10 +242,7 @@ mod tests {
     fn test_socket() -> String {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
-        format!(
-            "pit-test-{}",
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        )
+        format!("pit-test-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 
     fn tmux_cmd(socket: &str) -> Command {
@@ -271,15 +268,11 @@ mod tests {
     }
 
     fn kill(socket: &str, name: &str) {
-        let _ = tmux_cmd(socket)
-            .args(["kill-session", "-t", name])
-            .output();
+        let _ = tmux_cmd(socket).args(["kill-session", "-t", name]).output();
     }
 
     fn kill_server(socket: &str) {
-        let _ = tmux_cmd(socket)
-            .args(["kill-server"])
-            .output();
+        let _ = tmux_cmd(socket).args(["kill-server"]).output();
     }
 
     #[test]

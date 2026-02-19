@@ -49,7 +49,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
 // ── Task list (left pane) ───────────────────────────────────────────────────
 
 fn draw_task_list(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
 
     if app.tasks.is_empty() {
         let msg = Paragraph::new("  No tasks yet.\n  Press n to create.")
@@ -104,7 +108,11 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 // ── Detail pane (right side) ────────────────────────────────────────────────
 
 fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
     let block = Block::default()
         .title(" Detail ")
         .borders(Borders::ALL)
@@ -135,9 +143,12 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     let w = inner.width as usize;
 
     // ── Header ──
-    lines.push(Line::from(vec![
-        Span::styled(&task.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        &task.name,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )]));
 
     // Status + agent
     lines.push(Line::from(vec![
@@ -205,18 +216,12 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
             )));
         } else {
             for c in &info.commits {
-                let hash_span = Span::styled(
-                    format!("  {}", c.hash),
-                    Style::default().fg(Color::Yellow),
-                );
-                let msg_span = Span::styled(
-                    format!(" {}", c.message),
-                    Style::default().fg(Color::White),
-                );
-                let age_span = Span::styled(
-                    format!("  {}", c.age),
-                    Style::default().fg(Color::DarkGray),
-                );
+                let hash_span =
+                    Span::styled(format!("  {}", c.hash), Style::default().fg(Color::Yellow));
+                let msg_span =
+                    Span::styled(format!(" {}", c.message), Style::default().fg(Color::White));
+                let age_span =
+                    Span::styled(format!("  {}", c.age), Style::default().fg(Color::DarkGray));
                 lines.push(Line::from(vec![hash_span, msg_span, age_span]));
             }
         }
@@ -227,7 +232,11 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
         let file_count = info.files.len();
         lines.push(Line::from(vec![
             Span::styled(
-                format!("── Changes ({} file{}) ", file_count, if file_count == 1 { "" } else { "s" }),
+                format!(
+                    "── Changes ({} file{}) ",
+                    file_count,
+                    if file_count == 1 { "" } else { "s" }
+                ),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -265,17 +274,22 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                 let expand = if is_expanded { "▾ " } else { "▸ " };
 
                 let path_style = if is_selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
 
                 let mut spans = vec![
-                    Span::styled(marker, if is_selected {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    }),
+                    Span::styled(
+                        marker,
+                        if is_selected {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
                     Span::styled(expand, Style::default().fg(Color::DarkGray)),
                     Span::styled(path, path_style),
                     Span::raw(" ".repeat(padding)),
@@ -326,7 +340,8 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
                                     base_style
                                 };
                                 let line_marker = if is_active_line { "  ▸ " } else { "    " };
-                                let display: String = dl.chars().take(w.saturating_sub(6) as usize).collect();
+                                let display: String =
+                                    dl.chars().take(w.saturating_sub(6)).collect();
                                 lines.push(Line::from(Span::styled(
                                     format!("{}{}", line_marker, display),
                                     style,
@@ -385,7 +400,11 @@ fn status_color(status: Status) -> Style {
 }
 
 fn digit_count(n: usize) -> usize {
-    if n == 0 { 1 } else { (n as f64).log10().floor() as usize + 1 }
+    if n == 0 {
+        1
+    } else {
+        (n as f64).log10().floor() as usize + 1
+    }
 }
 
 // ── Modal ───────────────────────────────────────────────────────────────────
@@ -410,7 +429,11 @@ fn draw_kanban(frame: &mut Frame, app: &App, area: Rect) {
 
     for (col_idx, (header, color)) in headers.iter().enumerate() {
         let is_focused = app.kanban_col == col_idx && app.mode == Mode::Normal;
-        let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+        let border_color = if is_focused {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
 
         let tasks = app.kanban_column_tasks(col_idx);
         let count = tasks.len();
@@ -437,7 +460,9 @@ fn draw_kanban(frame: &mut Frame, app: &App, area: Rect) {
             let marker = if is_selected { "▸ " } else { "  " };
 
             let name_style = if is_selected {
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
@@ -455,7 +480,12 @@ fn draw_kanban(frame: &mut Frame, app: &App, area: Rect) {
             ]);
             frame.render_widget(
                 Paragraph::new(name_line),
-                Rect { x: inner.x, y, width: inner.width, height: 1 },
+                Rect {
+                    x: inner.x,
+                    y,
+                    width: inner.width,
+                    height: 1,
+                },
             );
 
             // Line 2: agent + extra info
@@ -465,7 +495,12 @@ fn draw_kanban(frame: &mut Frame, app: &App, area: Rect) {
             );
             frame.render_widget(
                 Paragraph::new(Line::from(agent_span)),
-                Rect { x: inner.x, y: y + 1, width: inner.width, height: 1 },
+                Rect {
+                    x: inner.x,
+                    y: y + 1,
+                    width: inner.width,
+                    height: 1,
+                },
             );
         }
 
@@ -474,7 +509,15 @@ fn draw_kanban(frame: &mut Frame, app: &App, area: Rect) {
                 "  (empty)",
                 Style::default().fg(Color::DarkGray),
             ));
-            frame.render_widget(empty, Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 });
+            frame.render_widget(
+                empty,
+                Rect {
+                    x: inner.x,
+                    y: inner.y,
+                    width: inner.width,
+                    height: 1,
+                },
+            );
         }
     }
 }
@@ -518,7 +561,14 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     let mut y = inner.y;
 
     // --- Task name ---
-    draw_field_label(frame, inner.x, y, fw, "Task name", m.field == ModalField::Name);
+    draw_field_label(
+        frame,
+        inner.x,
+        y,
+        fw,
+        "Task name",
+        m.field == ModalField::Name,
+    );
     y += 1;
     draw_field_input(frame, inner.x, y, fw, &m.name, m.field == ModalField::Name);
     if m.field == ModalField::Name {
@@ -527,7 +577,14 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     y += 2;
 
     // --- Agent prompt ---
-    draw_field_label(frame, inner.x, y, fw, "Agent prompt", m.field == ModalField::Prompt);
+    draw_field_label(
+        frame,
+        inner.x,
+        y,
+        fw,
+        "Agent prompt",
+        m.field == ModalField::Prompt,
+    );
     y += 1;
     let prompt_display = if m.prompt.is_empty() && m.field != ModalField::Prompt {
         "e.g. Fix the login timeout bug and add tests"
@@ -542,7 +599,15 @@ fn draw_modal(frame: &mut Frame, app: &App) {
         Style::default().fg(Color::Gray)
     };
     let prompt_widget = Paragraph::new(Span::styled(format!("  {}", prompt_display), prompt_style));
-    frame.render_widget(prompt_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    frame.render_widget(
+        prompt_widget,
+        Rect {
+            x: inner.x,
+            y,
+            width: fw,
+            height: 1,
+        },
+    );
     if m.field == ModalField::Prompt {
         frame.set_cursor_position((inner.x + 2 + m.prompt.len() as u16, y));
     }
@@ -552,30 +617,52 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     draw_field_label(frame, inner.x, y, fw, "Agent", m.field == ModalField::Agent);
     y += 1;
     let agent_style = if m.field == ModalField::Agent {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Gray)
     };
-    let arrows = if m.field == ModalField::Agent { "  ◂ " } else { "  " };
-    let arrows_r = if m.field == ModalField::Agent { " ▸" } else { "" };
+    let arrows = if m.field == ModalField::Agent {
+        "  ◂ "
+    } else {
+        "  "
+    };
+    let arrows_r = if m.field == ModalField::Agent {
+        " ▸"
+    } else {
+        ""
+    };
     let agent_widget = Paragraph::new(Line::from(vec![
         Span::styled(arrows, Style::default().fg(Color::DarkGray)),
         Span::styled(&m.agent, agent_style),
         Span::styled(arrows_r, Style::default().fg(Color::DarkGray)),
     ]));
-    frame.render_widget(agent_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    frame.render_widget(
+        agent_widget,
+        Rect {
+            x: inner.x,
+            y,
+            width: fw,
+            height: 1,
+        },
+    );
     y += 1;
 
     // --- Auto-approve ---
     let aa_active = m.field == ModalField::AutoApprove;
     let aa_label_style = if aa_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
     let check = if m.auto_approve { "✓" } else { " " };
     let check_style = if m.auto_approve {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else if aa_active {
         Style::default().fg(Color::White)
     } else {
@@ -586,26 +673,55 @@ fn draw_modal(frame: &mut Frame, app: &App) {
         Span::styled(format!("{} ", marker), aa_label_style),
         Span::styled(format!("[{}]", check), check_style),
         Span::styled(" Auto-approve ", aa_label_style),
-        Span::styled("— skip permission prompts", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "— skip permission prompts",
+            Style::default().fg(Color::DarkGray),
+        ),
     ]));
-    frame.render_widget(aa_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    frame.render_widget(
+        aa_widget,
+        Rect {
+            x: inner.x,
+            y,
+            width: fw,
+            height: 1,
+        },
+    );
     y += 1;
 
     // --- Separator ---
     let sep = "─".repeat(fw as usize);
     let sep_widget = Paragraph::new(Span::styled(&sep, Style::default().fg(Color::DarkGray)));
-    frame.render_widget(sep_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    frame.render_widget(
+        sep_widget,
+        Rect {
+            x: inner.x,
+            y,
+            width: fw,
+            height: 1,
+        },
+    );
     y += 1;
 
     // --- Issue ---
     let issue_active = m.field == ModalField::Issue;
     let issue_label_style = if issue_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
     let issue_label = Paragraph::new(Span::styled(" Issue", issue_label_style));
-    frame.render_widget(issue_label, Rect { x: inner.x, y, width: fw, height: 1 });
+    frame.render_widget(
+        issue_label,
+        Rect {
+            x: inner.x,
+            y,
+            width: fw,
+            height: 1,
+        },
+    );
     y += 1;
 
     if let Some(ref status) = m.issue_status {
@@ -615,32 +731,71 @@ fn draw_modal(frame: &mut Frame, app: &App) {
             Style::default().fg(Color::DarkGray)
         };
         let status_widget = Paragraph::new(Span::styled(format!("  {}", status), status_style));
-        frame.render_widget(status_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+        frame.render_widget(
+            status_widget,
+            Rect {
+                x: inner.x,
+                y,
+                width: fw,
+                height: 1,
+            },
+        );
     } else {
         let hint = if issue_active {
             Line::from(vec![
                 Span::styled("  Press ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Enter", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Enter",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" or ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Ctrl+L", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Ctrl+L",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" to link an issue", Style::default().fg(Color::DarkGray)),
             ])
         } else {
-            Line::from(Span::styled("  — no issue linked", Style::default().fg(Color::DarkGray)))
+            Line::from(Span::styled(
+                "  — no issue linked",
+                Style::default().fg(Color::DarkGray),
+            ))
         };
-        frame.render_widget(Paragraph::new(hint), Rect { x: inner.x, y, width: fw, height: 1 });
+        frame.render_widget(
+            Paragraph::new(hint),
+            Rect {
+                x: inner.x,
+                y,
+                width: fw,
+                height: 1,
+            },
+        );
     }
 }
 
 fn draw_field_label(frame: &mut Frame, x: u16, y: u16, w: u16, label: &str, active: bool) {
     let style = if active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
     let marker = if active { "▸" } else { " " };
     let widget = Paragraph::new(Span::styled(format!("{} {}", marker, label), style));
-    frame.render_widget(widget, Rect { x, y, width: w, height: 1 });
+    frame.render_widget(
+        widget,
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
+    );
 }
 
 fn draw_field_input(frame: &mut Frame, x: u16, y: u16, w: u16, value: &str, active: bool) {
@@ -650,7 +805,15 @@ fn draw_field_input(frame: &mut Frame, x: u16, y: u16, w: u16, value: &str, acti
         Style::default().fg(Color::Gray)
     };
     let widget = Paragraph::new(Span::styled(format!("  {}", value), style));
-    frame.render_widget(widget, Rect { x, y, width: w, height: 1 });
+    frame.render_widget(
+        widget,
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
+    );
 }
 
 // ── Toast / Help ────────────────────────────────────────────────────────────
@@ -693,7 +856,9 @@ fn draw_issue_picker(frame: &mut Frame, app: &App) {
     // Search field
     let search_label = Span::styled(
         " Search: ",
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     );
     let search_value = Span::styled(
         if m.picker_query.is_empty() {
@@ -708,7 +873,15 @@ fn draw_issue_picker(frame: &mut Frame, app: &App) {
         },
     );
     let search_line = Paragraph::new(Line::from(vec![search_label, search_value]));
-    frame.render_widget(search_line, Rect { x: inner.x, y, width: fw, height: 1 });
+    frame.render_widget(
+        search_line,
+        Rect {
+            x: inner.x,
+            y,
+            width: fw,
+            height: 1,
+        },
+    );
     // Cursor
     let cursor_x = inner.x + 9 + m.picker_query.len() as u16;
     frame.set_cursor_position((cursor_x.min(inner.x + fw - 1), y));
@@ -722,14 +895,30 @@ fn draw_issue_picker(frame: &mut Frame, app: &App) {
             Style::default().fg(Color::DarkGray)
         };
         let status_line = Paragraph::new(Span::styled(format!(" {}", status), style));
-        frame.render_widget(status_line, Rect { x: inner.x, y, width: fw, height: 1 });
+        frame.render_widget(
+            status_line,
+            Rect {
+                x: inner.x,
+                y,
+                width: fw,
+                height: 1,
+            },
+        );
     }
     y += 1;
 
     // Separator
     let sep = "─".repeat(fw as usize);
     let sep_widget = Paragraph::new(Span::styled(&sep, Style::default().fg(Color::DarkGray)));
-    frame.render_widget(sep_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    frame.render_widget(
+        sep_widget,
+        Rect {
+            x: inner.x,
+            y,
+            width: fw,
+            height: 1,
+        },
+    );
     y += 1;
 
     // Issue list
@@ -740,14 +929,22 @@ fn draw_issue_picker(frame: &mut Frame, app: &App) {
         0
     };
 
-    for (i, issue) in m.picker_results.iter().enumerate().skip(scroll).take(max_items) {
+    for (i, issue) in m
+        .picker_results
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(max_items)
+    {
         if y >= inner.y + inner.height {
             break;
         }
         let is_selected = i == m.picker_selected;
 
         let marker = if is_selected { "▸ " } else { "  " };
-        let id_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let id_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
         let title_style = if is_selected {
             Style::default().fg(Color::White)
         } else {
@@ -775,7 +972,15 @@ fn draw_issue_picker(frame: &mut Frame, app: &App) {
             Span::styled(format!(" [{}]", issue.state), state_style.patch(bg)),
         ]);
         let item = Paragraph::new(line);
-        frame.render_widget(item, Rect { x: inner.x, y, width: fw, height: 1 });
+        frame.render_widget(
+            item,
+            Rect {
+                x: inner.x,
+                y,
+                width: fw,
+                height: 1,
+            },
+        );
         y += 1;
     }
 
@@ -784,7 +989,15 @@ fn draw_issue_picker(frame: &mut Frame, app: &App) {
             "  No issues found",
             Style::default().fg(Color::DarkGray),
         ));
-        frame.render_widget(empty, Rect { x: inner.x, y, width: fw, height: 1 });
+        frame.render_widget(
+            empty,
+            Rect {
+                x: inner.x,
+                y,
+                width: fw,
+                height: 1,
+            },
+        );
     }
 
     // Help bar at bottom of picker
@@ -800,11 +1013,15 @@ fn draw_issue_picker(frame: &mut Frame, app: &App) {
             Span::styled("type", Style::default().fg(Color::Yellow)),
             Span::raw(":search"),
         ]);
-        let help_widget = Paragraph::new(help)
-            .style(Style::default().fg(Color::DarkGray));
+        let help_widget = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(
             help_widget,
-            Rect { x: inner.x, y: help_y, width: fw, height: 1 },
+            Rect {
+                x: inner.x,
+                y: help_y,
+                width: fw,
+                height: 1,
+            },
         );
     }
 }
@@ -837,7 +1054,10 @@ fn config_indicators() -> Vec<Span<'static>> {
     if linear {
         spans.push(Span::styled("Linear✓", Style::default().fg(Color::Green)));
     } else {
-        spans.push(Span::styled("Linear✗", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "Linear✗",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
 
     spans.push(Span::raw(" "));
@@ -845,7 +1065,10 @@ fn config_indicators() -> Vec<Span<'static>> {
     if github {
         spans.push(Span::styled("GitHub✓", Style::default().fg(Color::Green)));
     } else {
-        spans.push(Span::styled("GitHub✗", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "GitHub✗",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
 
     spans
@@ -856,36 +1079,61 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled(
                 " ↑/↓",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":navigate  "),
-            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":select  "),
-            Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":back  "),
-            Span::styled("type", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "type",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":search"),
         ])
     } else if app.mode == Mode::NewTask {
         Line::from(vec![
             Span::styled(
                 " Tab",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":next  "),
             Span::styled(
                 "Ctrl+L",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":issue  "),
             Span::styled(
                 "Enter",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":create  "),
             Span::styled(
                 "Esc",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":cancel"),
         ])
@@ -893,64 +1141,170 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled(
                 " ←/→",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":column  "),
-            Span::styled("↑/↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "↑/↓",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":select  "),
-            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":open  "),
-            Span::styled("t", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "t",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":shell  "),
-            Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":new  "),
-            Span::styled("d", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "d",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":del  "),
-            Span::styled("v", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "v",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":list  "),
-            Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "q",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":quit"),
         ])
     } else if app.focus == Pane::Detail {
         Line::from(vec![
             Span::styled(
                 " j/k",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":navigate  "),
-            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":expand diff  "),
-            Span::styled("h/←", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "h/←",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":back  "),
-            Span::styled("v", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "v",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":kanban  "),
-            Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":new  "),
-            Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "q",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":quit"),
         ])
     } else {
         Line::from(vec![
             Span::styled(
                 " Enter",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(":open  "),
-            Span::styled("l/→", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "l/→",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":detail  "),
-            Span::styled("t", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "t",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":shell  "),
-            Span::styled("b", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "b",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":bg  "),
-            Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":new  "),
-            Span::styled("d", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "d",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":del  "),
-            Span::styled("v", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "v",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":kanban  "),
-            Span::styled("r", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "r",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":refresh  "),
-            Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "q",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(":quit"),
         ])
     };

@@ -36,6 +36,7 @@ impl Status {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Task {
     pub id: i64,
     pub name: String,
@@ -64,11 +65,7 @@ pub struct CreateOpts<'a> {
 }
 
 /// Create a new task: git branch + worktree + DB row.
-pub fn create(
-    db: &Connection,
-    repo_root: &Path,
-    opts: &CreateOpts,
-) -> Result<Task> {
+pub fn create(db: &Connection, repo_root: &Path, opts: &CreateOpts) -> Result<Task> {
     let name = opts.name;
     let description = opts.description;
     // Validate name: no spaces, no slashes, reasonable length
@@ -124,13 +121,25 @@ pub fn create(
         bail!("git worktree add failed: {}", stderr.trim());
     }
 
-    let agent = if opts.agent.is_empty() { "claude" } else { opts.agent };
+    let agent = if opts.agent.is_empty() {
+        "claude"
+    } else {
+        opts.agent
+    };
 
     // Insert into database
     db.execute(
         "INSERT INTO tasks (name, description, prompt, issue_url, agent, branch, worktree)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![name, description, opts.prompt, opts.issue_url, agent, branch, worktree_str],
+        params![
+            name,
+            description,
+            opts.prompt,
+            opts.issue_url,
+            agent,
+            branch,
+            worktree_str
+        ],
     )
     .with_context(|| format!("failed to insert task '{}'", name))?;
 
@@ -241,7 +250,10 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         rusqlite::Error::FromSqlConversionFailure(
             8,
             rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            )),
         )
     })?;
 
@@ -311,13 +323,18 @@ mod tests {
     #[test]
     fn create_and_get() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), &CreateOpts {
-            name: "fix-bug",
-            description: "Fix the login bug",
-            prompt: "find and fix the login timeout",
-            issue_url: "https://linear.app/123",
-            agent: "claude",
-        }).unwrap();
+        let task = create(
+            &db,
+            repo.path(),
+            &CreateOpts {
+                name: "fix-bug",
+                description: "Fix the login bug",
+                prompt: "find and fix the login timeout",
+                issue_url: "https://linear.app/123",
+                agent: "claude",
+            },
+        )
+        .unwrap();
 
         assert_eq!(task.name, "fix-bug");
         assert_eq!(task.description, "Fix the login bug");
@@ -340,13 +357,18 @@ mod tests {
     #[test]
     fn create_with_agent() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), &CreateOpts {
-            name: "codex-task",
-            description: "",
-            prompt: "",
-            issue_url: "",
-            agent: "codex",
-        }).unwrap();
+        let task = create(
+            &db,
+            repo.path(),
+            &CreateOpts {
+                name: "codex-task",
+                description: "",
+                prompt: "",
+                issue_url: "",
+                agent: "codex",
+            },
+        )
+        .unwrap();
         assert_eq!(task.agent, "codex");
 
         // Re-read from DB to confirm persistence
@@ -357,26 +379,36 @@ mod tests {
     #[test]
     fn create_empty_agent_defaults_to_claude() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), &CreateOpts {
-            name: "default-agent",
-            description: "",
-            prompt: "",
-            issue_url: "",
-            agent: "",
-        }).unwrap();
+        let task = create(
+            &db,
+            repo.path(),
+            &CreateOpts {
+                name: "default-agent",
+                description: "",
+                prompt: "",
+                issue_url: "",
+                agent: "",
+            },
+        )
+        .unwrap();
         assert_eq!(task.agent, "claude");
     }
 
     #[test]
     fn create_with_custom_agent() {
         let (repo, db) = setup();
-        let task = create(&db, repo.path(), &CreateOpts {
-            name: "amp-task",
-            description: "",
-            prompt: "do the thing",
-            issue_url: "",
-            agent: "amp",
-        }).unwrap();
+        let task = create(
+            &db,
+            repo.path(),
+            &CreateOpts {
+                name: "amp-task",
+                description: "",
+                prompt: "do the thing",
+                issue_url: "",
+                agent: "amp",
+            },
+        )
+        .unwrap();
         assert_eq!(task.agent, "amp");
         assert_eq!(task.prompt, "do the thing");
     }

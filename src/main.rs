@@ -12,7 +12,11 @@ use crate::core::task;
 use crate::core::tmux;
 
 #[derive(Parser)]
-#[command(name = "pit", version, about = "Run multiple coding agents in parallel")]
+#[command(
+    name = "pit",
+    version,
+    about = "Run multiple coding agents in parallel"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -165,7 +169,10 @@ fn cmd_new(name: &str, description: &str, prompt: &str, issue: &str, agent: &str
             agent,
         },
     )?;
-    println!("Created task '{}' on branch '{}' (agent: {})", t.name, t.branch, t.agent);
+    println!(
+        "Created task '{}' on branch '{}' (agent: {})",
+        t.name, t.branch, t.agent
+    );
     println!("  worktree: {}", t.worktree);
     if !t.prompt.is_empty() {
         println!("  prompt: {}", t.prompt);
@@ -183,7 +190,7 @@ fn cmd_list() -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<4} {:<20} {:<10} {}", "ID", "NAME", "STATUS", "BRANCH");
+    println!("{:<4} {:<20} {:<10} BRANCH", "ID", "NAME", "STATUS");
     println!("{}", "-".repeat(60));
     for t in &tasks {
         println!("{:<4} {:<20} {:<10} {}", t.id, t.name, t.status, t.branch);
@@ -239,7 +246,10 @@ fn cmd_run(name: &str) -> Result<()> {
     tmux::create_session_with_cmd(&tmux_name, &t.worktree, &agent_cmd)?;
     task::set_running(&project.db, t.id, &tmux_name, None, Some(&session_id))?;
 
-    println!("Started task '{}' ({}) in background (tmux: {})", name, t.agent, tmux_name);
+    println!(
+        "Started task '{}' ({}) in background (tmux: {})",
+        name, t.agent, tmux_name
+    );
     println!("  Attach with: tmux -L pit attach -t {}", tmux_name);
     println!("  Detach with: F1");
     Ok(())
@@ -346,12 +356,10 @@ fn cmd_config(action: ConfigAction) -> Result<()> {
             config::set(&key, &value)?;
             println!("Set {} = {}", key, mask_secret(&key, &value));
         }
-        ConfigAction::Get { key } => {
-            match config::get(&key) {
-                Some(value) => println!("{} = {}", key, mask_secret(&key, &value)),
-                None => println!("{} is not set", key),
-            }
-        }
+        ConfigAction::Get { key } => match config::get(&key) {
+            Some(value) => println!("{} = {}", key, mask_secret(&key, &value)),
+            None => println!("{} is not set", key),
+        },
         ConfigAction::Unset { key } => {
             config::unset(&key)?;
             println!("Removed {}", key);
@@ -387,7 +395,14 @@ fn mask_secret(key: &str, value: &str) -> String {
         return value.to_string();
     }
     let prefix: String = value.chars().take(4).collect();
-    let suffix: String = value.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{}...{}", prefix, suffix)
 }
 

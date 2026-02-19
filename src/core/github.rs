@@ -36,11 +36,9 @@ pub fn parse_issue_url(url: &str) -> Option<GitHubIssueRef> {
     // Find "issues" segment: .../owner/repo/issues/123
     for (i, part) in parts.iter().enumerate() {
         if *part == "issues" {
-            if let (Some(repo), Some(owner), Some(num_str)) = (
-                parts.get(i - 1),
-                parts.get(i - 2),
-                parts.get(i + 1),
-            ) {
+            if let (Some(repo), Some(owner), Some(num_str)) =
+                (parts.get(i - 1), parts.get(i - 2), parts.get(i + 1))
+            {
                 if let Ok(number) = num_str.parse::<u64>() {
                     return Some(GitHubIssueRef {
                         owner: owner.to_string(),
@@ -76,7 +74,9 @@ pub fn fetch_issue(issue_ref: &GitHubIssueRef) -> Result<GitHubIssue> {
     }
 
     let resp = req.call().context("failed to call GitHub API")?;
-    let body: serde_json::Value = resp.into_json().context("failed to parse GitHub response")?;
+    let body: serde_json::Value = resp
+        .into_json()
+        .context("failed to parse GitHub response")?;
 
     if let Some(msg) = body.get("message").and_then(|m| m.as_str()) {
         bail!("GitHub API error: {}", msg);
@@ -87,7 +87,11 @@ pub fn fetch_issue(issue_ref: &GitHubIssueRef) -> Result<GitHubIssue> {
         .and_then(|l| l.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                .filter_map(|v| {
+                    v.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default();

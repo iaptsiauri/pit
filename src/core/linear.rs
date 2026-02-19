@@ -6,7 +6,6 @@
 //! We extract the issue identifier (e.g. "PROJ-123") and query Linear's API.
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
 
 /// Parsed issue data from Linear.
 #[derive(Debug, Clone)]
@@ -52,7 +51,7 @@ pub fn fetch_issue(identifier: &str) -> Result<LinearIssue> {
     let api_key = super::config::get("linear.api_key")
         .context("Linear API key not set. Run: pit config set linear.api_key <your-key>")?;
 
-    let query = format!(
+    let _query = format!(
         r#"{{
             "query": "query {{ issue(id: \"{id}\") {{ identifier title description state {{ name }} priority priorityLabel url }} }}"
         }}"#,
@@ -90,7 +89,9 @@ pub fn fetch_issue(identifier: &str) -> Result<LinearIssue> {
         .send_string(&query.to_string())
         .context("failed to call Linear API")?;
 
-    let body: serde_json::Value = resp.into_json().context("failed to parse Linear response")?;
+    let body: serde_json::Value = resp
+        .into_json()
+        .context("failed to parse Linear response")?;
 
     // Check for errors
     if let Some(errors) = body.get("errors") {
@@ -153,7 +154,9 @@ pub fn search_issues(query: &str, limit: usize) -> Result<Vec<LinearIssue>> {
         .send_string(&gql.to_string())
         .context("failed to call Linear API")?;
 
-    let body: serde_json::Value = resp.into_json().context("failed to parse Linear response")?;
+    let body: serde_json::Value = resp
+        .into_json()
+        .context("failed to parse Linear response")?;
 
     if let Some(errors) = body.get("errors") {
         bail!("Linear API error: {}", errors);
@@ -222,7 +225,9 @@ pub fn my_issues(limit: usize) -> Result<Vec<LinearIssue>> {
         .send_string(&gql.to_string())
         .context("failed to call Linear API")?;
 
-    let body: serde_json::Value = resp.into_json().context("failed to parse Linear response")?;
+    let body: serde_json::Value = resp
+        .into_json()
+        .context("failed to parse Linear response")?;
 
     if let Some(errors) = body.get("errors") {
         bail!("Linear API error: {}", errors);
@@ -293,7 +298,10 @@ mod tests {
 
     #[test]
     fn parse_not_linear_url() {
-        assert_eq!(parse_issue_id("https://github.com/org/repo/issues/42"), None);
+        assert_eq!(
+            parse_issue_id("https://github.com/org/repo/issues/42"),
+            None
+        );
         assert_eq!(parse_issue_id("not a url"), None);
         assert_eq!(parse_issue_id(""), None);
     }

@@ -103,8 +103,7 @@ fn load_config() -> Result<HashMap<String, String>> {
 /// Save config to file in TOML-like format.
 fn save_config(config: &HashMap<String, String>) -> Result<()> {
     let dir = data_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     // Group by section
     let mut sections: HashMap<String, Vec<(String, String)>> = HashMap::new();
@@ -154,8 +153,7 @@ fn save_config(config: &HashMap<String, String>) -> Result<()> {
     }
 
     let path = config_path();
-    std::fs::write(&path, output)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, output).with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(())
 }

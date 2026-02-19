@@ -99,9 +99,11 @@ mod tests {
         .unwrap();
 
         let (name, branch, status): (String, String, String) = conn
-            .query_row("SELECT name, branch, status FROM tasks WHERE id = 1", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT name, branch, status FROM tasks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .unwrap();
 
         assert_eq!(name, "test");

@@ -4,7 +4,6 @@ use ratatui::DefaultTerminal;
 use std::time::Duration;
 
 use crate::core::git_info::{self, TaskGitInfo};
-use crate::core::issues;
 use crate::core::names;
 use crate::core::project::Project;
 use crate::core::reap;
@@ -81,8 +80,6 @@ pub struct ModalState {
     pub auto_approve: bool,
     /// Status message after fetching an issue (e.g. "✓ ENG-42: Fix login" or "✗ not found")
     pub issue_status: Option<String>,
-    /// Whether we already tried fetching for this URL (avoid re-fetching on every tab)
-    issue_fetched_url: String,
     /// Linear issue picker state
     pub picker_query: String,
     pub picker_results: Vec<crate::core::linear::LinearIssue>,
@@ -102,7 +99,6 @@ impl ModalState {
             issue: String::new(),
             auto_approve: false,
             issue_status: None,
-            issue_fetched_url: String::new(),
             picker_query: String::new(),
             picker_results: Vec::new(),
             picker_selected: 0,
@@ -112,58 +108,11 @@ impl ModalState {
 
     /// Try to fetch issue data from the URL and populate the prompt.
     /// Only fetches if the URL changed since last fetch.
-    fn try_fetch_issue(&mut self) {
-        let url = self.issue.trim().to_string();
-        if url.is_empty() || url == self.issue_fetched_url {
-            return;
-        }
-
-        let provider = issues::detect_provider(&url);
-        if provider == issues::Provider::Unknown {
-            if !url.is_empty() {
-                self.issue_status = Some("? unrecognized URL".to_string());
-            }
-            self.issue_fetched_url = url;
-            return;
-        }
-
-        self.issue_status = Some(format!("⟳ fetching from {}…", provider));
-        self.issue_fetched_url = url.clone();
-
-        match issues::fetch(&url) {
-            Ok(issue) => {
-                let prompt = issues::issue_to_prompt(&issue);
-                // Only auto-fill if prompt is empty
-                if self.prompt.is_empty() {
-                    self.prompt = prompt;
-                }
-                self.issue_status = Some(format!(
-                    "✓ {} · {} [{}]",
-                    issue.identifier, issue.title, issue.state
-                ));
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                // Truncate long error messages
-                let short: String = msg.chars().take(60).collect();
-                self.issue_status = Some(format!("✗ {}", short));
-            }
-        }
-    }
-
     fn active_text_mut(&mut self) -> Option<&mut String> {
         match self.field {
             ModalField::Name => Some(&mut self.name),
             ModalField::Prompt => Some(&mut self.prompt),
             _ => None,
-        }
-    }
-
-    pub fn active_text(&self) -> &str {
-        match self.field {
-            ModalField::Name => &self.name,
-            ModalField::Prompt => &self.prompt,
-            _ => "",
         }
     }
 
@@ -482,10 +431,7 @@ impl App {
 
     /// How many files are in the current detail.
     fn file_count(&self) -> usize {
-        self.detail
-            .as_ref()
-            .map(|d| d.files.len())
-            .unwrap_or(0)
+        self.detail.as_ref().map(|d| d.files.len()).unwrap_or(0)
     }
 
     /// How many diff lines the currently selected file has (if expanded).
@@ -678,7 +624,7 @@ impl App {
 
             // Tab / Shift-Tab: cycle fields
             (KeyCode::Tab, _) => {
-                let leaving = self.modal.field;
+                let _leaving = self.modal.field;
                 self.modal.field = self.modal.field.next();
                 Ok(Action::None)
             }
@@ -694,9 +640,7 @@ impl App {
             }
 
             // Enter: submit (from any other field)
-            (KeyCode::Enter, _) => {
-                self.try_submit()
-            }
+            (KeyCode::Enter, _) => self.try_submit(),
 
             // Agent field: left/right to cycle
             (KeyCode::Left, _) if self.modal.field == ModalField::Agent => {
@@ -727,7 +671,9 @@ impl App {
                 }
                 Ok(Action::None)
             }
-            (KeyCode::Char(c), m) if self.modal.field.is_text_input() && !m.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char(c), m)
+                if self.modal.field.is_text_input() && !m.contains(KeyModifiers::CONTROL) =>
+            {
                 if let Some(text) = self.modal.active_text_mut() {
                     text.push(c);
                 }
@@ -774,7 +720,9 @@ impl App {
                 }
                 Ok(Action::None)
             }
-            (KeyCode::Down | KeyCode::Char('j'), _) if !modifiers.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Down | KeyCode::Char('j'), _)
+                if !modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 if !self.modal.picker_results.is_empty()
                     && self.modal.picker_selected < self.modal.picker_results.len() - 1
                 {
@@ -789,7 +737,6 @@ impl App {
                     let issue = issue.clone();
                     // Fill in the modal fields
                     self.modal.issue = issue.url.clone();
-                    self.modal.issue_fetched_url = issue.url.clone();
                     self.modal.issue_status = Some(format!(
                         "✓ {} · {} [{}]",
                         issue.identifier, issue.title, issue.state
@@ -975,7 +922,13 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 
 // --- Handlers ---
 
-fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str, agent: &str) -> Result<()> {
+fn handle_create(
+    app: &mut App,
+    name: &str,
+    prompt: &str,
+    issue_url: &str,
+    agent: &str,
+) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     match task::create(
         &db,
@@ -1189,14 +1142,16 @@ mod tests {
     #[test]
     fn quit_on_q() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE)
+            .unwrap();
         assert!(app.should_quit);
     }
 
     #[test]
     fn quit_on_ctrl_c() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL).unwrap();
+        app.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            .unwrap();
         assert!(app.should_quit);
     }
 
@@ -1210,13 +1165,15 @@ mod tests {
         let mut app = make_app(tasks);
         app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 1);
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.selected, 2);
         app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 2);
         app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 1);
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.selected, 0);
         app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 0);
@@ -1224,7 +1181,10 @@ mod tests {
 
     #[test]
     fn enter_returns_task_id() {
-        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle), make_task(2, "b", task::Status::Idle)]);
+        let mut app = make_app(vec![
+            make_task(1, "a", task::Status::Idle),
+            make_task(2, "b", task::Status::Idle),
+        ]);
         app.selected = 1;
         let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert!(matches!(action, Action::Enter(2)));
@@ -1240,28 +1200,36 @@ mod tests {
     #[test]
     fn background_returns_task_id() {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
-        let action = app.handle_key(KeyCode::Char('b'), KeyModifiers::NONE).unwrap();
+        let action = app
+            .handle_key(KeyCode::Char('b'), KeyModifiers::NONE)
+            .unwrap();
         assert!(matches!(action, Action::Background(1)));
     }
 
     #[test]
     fn delete_returns_task_id() {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
-        let action = app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE).unwrap();
+        let action = app
+            .handle_key(KeyCode::Char('d'), KeyModifiers::NONE)
+            .unwrap();
         assert!(matches!(action, Action::Delete(1)));
     }
 
     #[test]
     fn shell_returns_task_id() {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
-        let action = app.handle_key(KeyCode::Char('t'), KeyModifiers::NONE).unwrap();
+        let action = app
+            .handle_key(KeyCode::Char('t'), KeyModifiers::NONE)
+            .unwrap();
         assert!(matches!(action, Action::Shell(1)));
     }
 
     #[test]
     fn shell_on_empty_list_is_noop() {
         let mut app = make_app(vec![]);
-        let action = app.handle_key(KeyCode::Char('t'), KeyModifiers::NONE).unwrap();
+        let action = app
+            .handle_key(KeyCode::Char('t'), KeyModifiers::NONE)
+            .unwrap();
         assert!(matches!(action, Action::None));
     }
 
@@ -1270,26 +1238,34 @@ mod tests {
     #[test]
     fn n_opens_modal_with_generated_name() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.mode, Mode::NewTask);
         assert_eq!(app.modal.field, ModalField::Name);
         // Name should be auto-generated (adjective-noun)
-        assert!(app.modal.name.contains('-'), "expected generated name, got: {}", app.modal.name);
+        assert!(
+            app.modal.name.contains('-'),
+            "expected generated name, got: {}",
+            app.modal.name
+        );
         assert!(!app.modal.name.is_empty());
     }
 
     #[test]
     fn modal_typing_replaces_generated_name() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         // Clear the generated name
         while !app.modal.name.is_empty() {
-            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
+                .unwrap();
         }
 
         for c in "fix-bug".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE)
+                .unwrap();
         }
         assert_eq!(app.modal.name, "fix-bug");
     }
@@ -1297,7 +1273,8 @@ mod tests {
     #[test]
     fn modal_tab_cycles_all_fields() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.modal.field, ModalField::Name);
 
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
@@ -1319,19 +1296,23 @@ mod tests {
     #[test]
     fn modal_backtab_cycles_backwards() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
-        app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::BackTab, KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.modal.field, ModalField::Issue);
 
-        app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::BackTab, KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.modal.field, ModalField::AutoApprove);
     }
 
     #[test]
     fn modal_agent_cycle() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         // Go to agent field
         app.modal.field = ModalField::Agent;
@@ -1350,22 +1331,26 @@ mod tests {
     #[test]
     fn modal_auto_approve_toggle() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         app.modal.field = ModalField::AutoApprove;
         assert!(!app.modal.auto_approve);
 
-        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE)
+            .unwrap();
         assert!(app.modal.auto_approve);
 
-        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE)
+            .unwrap();
         assert!(!app.modal.auto_approve);
     }
 
     #[test]
     fn modal_esc_cancels() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::Normal);
     }
@@ -1373,20 +1358,24 @@ mod tests {
     #[test]
     fn modal_submit_full_flow() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         // Clear generated name, type custom
         while !app.modal.name.is_empty() {
-            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
+                .unwrap();
         }
         for c in "my-task".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE)
+                .unwrap();
         }
 
         // Tab to prompt
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
         for c in "fix the bug".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE)
+                .unwrap();
         }
 
         // Submit
@@ -1402,7 +1391,8 @@ mod tests {
     #[test]
     fn modal_submit_with_generated_name() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         let generated = app.modal.name.clone();
         assert!(!generated.is_empty());
@@ -1418,11 +1408,13 @@ mod tests {
     #[test]
     fn modal_empty_name_shows_error() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         // Clear the generated name
         while !app.modal.name.is_empty() {
-            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
+                .unwrap();
         }
 
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
@@ -1433,13 +1425,16 @@ mod tests {
     #[test]
     fn modal_invalid_name_shows_error() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         while !app.modal.name.is_empty() {
-            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
+                .unwrap();
         }
         for c in "has spaces".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE)
+                .unwrap();
         }
 
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
@@ -1450,13 +1445,15 @@ mod tests {
     #[test]
     fn modal_typing_in_prompt_field() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.field, ModalField::Prompt);
 
         for c in "refactor the API layer".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE)
+                .unwrap();
         }
         assert_eq!(app.modal.prompt, "refactor the API layer");
     }
@@ -1464,10 +1461,12 @@ mod tests {
     #[test]
     fn issue_field_rejects_typing() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         app.modal.field = ModalField::Issue;
-        app.handle_key(KeyCode::Char('x'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('x'), KeyModifiers::NONE)
+            .unwrap();
         // Issue field is not a text input — typing is ignored
         assert!(app.modal.issue.is_empty());
     }
@@ -1475,7 +1474,8 @@ mod tests {
     #[test]
     fn modal_submit_includes_agent() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         // Cycle to codex
         app.modal.field = ModalField::Agent;
@@ -1493,7 +1493,8 @@ mod tests {
     #[test]
     fn modal_submit_default_agent_is_claude() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
 
         let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert!(matches!(
@@ -1539,7 +1540,11 @@ mod tests {
         assert_eq!(session_id, "sess-123");
         assert_eq!(cmd, "claude -r sess-123");
         // Resume should NOT include the prompt
-        assert!(!cmd.contains("-p"), "resume should not include prompt, got: {}", cmd);
+        assert!(
+            !cmd.contains("-p"),
+            "resume should not include prompt, got: {}",
+            cmd
+        );
     }
 
     #[test]
@@ -1633,7 +1638,8 @@ mod tests {
     #[test]
     fn l_moves_to_detail_pane() {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
-        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.focus, Pane::Detail);
     }
 
@@ -1648,7 +1654,8 @@ mod tests {
     fn h_moves_back_to_tasklist() {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.focus = Pane::Detail;
-        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.focus, Pane::TaskList);
     }
 
@@ -1671,16 +1678,15 @@ mod tests {
 
     #[test]
     fn esc_layered_in_detail() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Inside a diff line
         app.file_cursor = Some(0);
         app.expanded_files.insert(0);
-        app.file_diffs.insert(0, vec!["@@ @@".into(), "+line".into()]);
+        app.file_diffs
+            .insert(0, vec!["@@ @@".into(), "+line".into()]);
         app.diff_line = Some(1);
 
         // Esc 1: exits diff line → on file header
@@ -1710,75 +1716,90 @@ mod tests {
 
     fn sample_files() -> Vec<git_info::FileStat> {
         vec![
-            git_info::FileStat { path: "src/main.rs".into(), insertions: 10, deletions: 2 },
-            git_info::FileStat { path: "src/lib.rs".into(), insertions: 5, deletions: 0 },
-            git_info::FileStat { path: "Cargo.toml".into(), insertions: 1, deletions: 0 },
+            git_info::FileStat {
+                path: "src/main.rs".into(),
+                insertions: 10,
+                deletions: 2,
+            },
+            git_info::FileStat {
+                path: "src/lib.rs".into(),
+                insertions: 5,
+                deletions: 0,
+            },
+            git_info::FileStat {
+                path: "Cargo.toml".into(),
+                insertions: 1,
+                deletions: 0,
+            },
         ]
     }
 
     #[test]
     fn jk_in_detail_moves_file_cursor() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
         assert_eq!(app.file_cursor, None);
 
         // First j: selects first file
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(0));
 
         // Second j: moves to second file
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(1));
 
         // Third j: moves to third file
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(2));
 
         // Fourth j: stays at last file
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(2));
 
         // k: moves back
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(1));
 
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(0));
 
         // k from first file: deselects (back to None)
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, None);
 
         // k from None: stays None
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, None);
     }
 
     #[test]
     fn jk_in_detail_no_files_is_noop() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            vec![],
-        );
+        let mut app = make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], vec![]);
         app.focus = Pane::Detail;
 
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, None);
     }
 
     #[test]
     fn enter_on_file_toggles_expansion() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Navigate to first file
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(0));
         assert!(!app.expanded_files.contains(&0));
 
@@ -1793,10 +1814,8 @@ mod tests {
 
     #[test]
     fn enter_with_no_file_selected_launches_agent() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
         assert_eq!(app.file_cursor, None);
 
@@ -1806,19 +1825,19 @@ mod tests {
 
     #[test]
     fn multiple_files_can_be_expanded() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Expand file 0
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert!(app.expanded_files.contains(&0));
 
         // Move to file 1 and expand
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert!(app.expanded_files.contains(&0));
         assert!(app.expanded_files.contains(&1));
@@ -1826,15 +1845,14 @@ mod tests {
 
     #[test]
     fn g_resets_file_cursor_and_diff_line() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
         app.file_cursor = Some(2);
         app.diff_line = Some(5);
 
-        app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, None);
         assert_eq!(app.diff_line, None);
         assert_eq!(app.detail_scroll, 0);
@@ -1842,13 +1860,12 @@ mod tests {
 
     #[test]
     fn G_selects_last_file() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
-        app.handle_key(KeyCode::Char('G'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('G'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(2)); // last of 3 files
         assert_eq!(app.diff_line, None);
     }
@@ -1861,7 +1878,8 @@ mod tests {
         ]);
         assert_eq!(app.focus, Pane::TaskList);
 
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.selected, 1);
         assert_eq!(app.file_cursor, None);
     }
@@ -1871,10 +1889,12 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.focus = Pane::Detail;
 
-        app.handle_key(KeyCode::PageDown, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::PageDown, KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.detail_scroll, 10);
 
-        app.handle_key(KeyCode::PageDown, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::PageDown, KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.detail_scroll, 20);
 
         app.handle_key(KeyCode::PageUp, KeyModifiers::NONE).unwrap();
@@ -1895,7 +1915,8 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.focus = Pane::Detail;
 
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.mode, Mode::NewTask);
     }
 
@@ -1904,7 +1925,8 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.focus = Pane::Detail;
 
-        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::NONE)
+            .unwrap();
         assert!(app.should_quit);
     }
 
@@ -1913,7 +1935,8 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         assert_eq!(app.focus, Pane::TaskList);
 
-        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.focus, Pane::TaskList); // stays in task list
     }
 
@@ -1922,44 +1945,51 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.focus = Pane::Detail;
 
-        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.focus, Pane::Detail); // stays in detail
     }
 
     #[test]
     fn j_enters_expanded_diff_then_exits_to_next_file() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Select and expand file 0
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(0));
         // Simulate expanding with cached diff
         app.expanded_files.insert(0);
-        app.file_diffs.insert(0, vec![
-            "@@ -0,0 +1,3 @@".into(),
-            "+fn main() {}".into(),
-            "+// end".into(),
-        ]);
+        app.file_diffs.insert(
+            0,
+            vec![
+                "@@ -0,0 +1,3 @@".into(),
+                "+fn main() {}".into(),
+                "+// end".into(),
+            ],
+        );
 
         // j enters the diff: line 0
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(0));
         assert_eq!(app.diff_line, Some(0));
 
         // j moves to line 1
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.diff_line, Some(1));
 
         // j moves to line 2 (last)
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.diff_line, Some(2));
 
         // j past last line: exits to next file
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(1));
         assert_eq!(app.diff_line, None);
         // file 0 still expanded
@@ -1968,95 +1998,94 @@ mod tests {
 
     #[test]
     fn k_exits_diff_to_file_header() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Select file 0, expand, enter diff
         app.file_cursor = Some(0);
         app.expanded_files.insert(0);
-        app.file_diffs.insert(0, vec![
-            "@@ line @@".into(),
-            "+added".into(),
-        ]);
+        app.file_diffs
+            .insert(0, vec!["@@ line @@".into(), "+added".into()]);
         app.diff_line = Some(1);
 
         // k: move to line 0
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.diff_line, Some(0));
 
         // k: back to file header
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.diff_line, None);
         assert_eq!(app.file_cursor, Some(0));
     }
 
     #[test]
     fn k_from_file_header_to_prev_file_last_diff_line() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Expand file 0 with 3 lines
         app.expanded_files.insert(0);
-        app.file_diffs.insert(0, vec![
-            "@@ hunk @@".into(),
-            "+line1".into(),
-            "+line2".into(),
-        ]);
+        app.file_diffs.insert(
+            0,
+            vec!["@@ hunk @@".into(), "+line1".into(), "+line2".into()],
+        );
 
         // Cursor on file 1 header
         app.file_cursor = Some(1);
         app.diff_line = None;
 
         // k: should go to file 0, last diff line
-        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(0));
         assert_eq!(app.diff_line, Some(2)); // last line of file 0's diff
     }
 
     #[test]
     fn switching_pane_preserves_file_cursor() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Select file 1
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.file_cursor, Some(1));
 
         // Switch to task list and back
-        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.focus, Pane::TaskList);
         assert_eq!(app.file_cursor, Some(1)); // preserved
 
-        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.focus, Pane::Detail);
         assert_eq!(app.file_cursor, Some(1)); // still there
     }
 
     #[test]
     fn expanded_files_preserved_across_pane_switch() {
-        let mut app = make_app_with_files(
-            vec![make_task(1, "a", task::Status::Idle)],
-            sample_files(),
-        );
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
         app.focus = Pane::Detail;
 
         // Expand file 0
-        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+            .unwrap();
         app.expanded_files.insert(0);
 
         // Switch panes and back
-        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE).unwrap();
-        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+            .unwrap();
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE)
+            .unwrap();
 
         // Still expanded
         assert!(app.expanded_files.contains(&0));
@@ -2067,7 +2096,8 @@ mod tests {
     #[test]
     fn issue_field_enter_tries_to_open_picker() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         app.modal.field = ModalField::Issue;
 
         // Enter on Issue field should NOT submit — it should try to open picker
@@ -2079,10 +2109,12 @@ mod tests {
     #[test]
     fn issue_field_space_tries_to_open_picker() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         app.modal.field = ModalField::Issue;
 
-        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE)
+            .unwrap();
         assert!(app.mode == Mode::IssuePicker || app.error.is_some());
     }
 
@@ -2090,20 +2122,24 @@ mod tests {
     fn issue_field_is_not_text_input() {
         // Typing in the Issue field should NOT insert characters
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         app.modal.field = ModalField::Issue;
 
-        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE)
+            .unwrap();
         assert!(app.modal.issue.is_empty());
     }
 
     #[test]
     fn ctrl_l_tries_to_open_picker() {
         let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.mode, Mode::NewTask);
 
-        app.handle_key(KeyCode::Char('l'), KeyModifiers::CONTROL).unwrap();
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::CONTROL)
+            .unwrap();
         // Either opens picker (if key configured) or shows error
         assert!(app.mode == Mode::IssuePicker || app.error.is_some());
     }
@@ -2162,16 +2198,14 @@ mod tests {
     fn picker_enter_fills_modal() {
         let mut app = make_app(vec![]);
         app.mode = Mode::IssuePicker;
-        app.modal.picker_results = vec![
-            crate::core::linear::LinearIssue {
-                identifier: "ENG-42".into(),
-                title: "Fix login".into(),
-                description: "SSO timeout issue".into(),
-                state: "In Progress".into(),
-                priority_label: "High".into(),
-                url: "https://linear.app/t/issue/ENG-42/fix-login".into(),
-            },
-        ];
+        app.modal.picker_results = vec![crate::core::linear::LinearIssue {
+            identifier: "ENG-42".into(),
+            title: "Fix login".into(),
+            description: "SSO timeout issue".into(),
+            state: "In Progress".into(),
+            priority_label: "High".into(),
+            url: "https://linear.app/t/issue/ENG-42/fix-login".into(),
+        }];
         app.modal.picker_selected = 0;
         app.modal.prompt = String::new();
 
@@ -2180,7 +2214,10 @@ mod tests {
         // Should return to modal mode
         assert_eq!(app.mode, Mode::NewTask);
         // Issue URL filled
-        assert_eq!(app.modal.issue, "https://linear.app/t/issue/ENG-42/fix-login");
+        assert_eq!(
+            app.modal.issue,
+            "https://linear.app/t/issue/ENG-42/fix-login"
+        );
         // Prompt auto-filled
         assert!(app.modal.prompt.contains("ENG-42"));
         assert!(app.modal.prompt.contains("Fix login"));
@@ -2196,16 +2233,14 @@ mod tests {
         let mut app = make_app(vec![]);
         app.mode = Mode::IssuePicker;
         app.modal.prompt = "my existing prompt".to_string();
-        app.modal.picker_results = vec![
-            crate::core::linear::LinearIssue {
-                identifier: "X-1".into(),
-                title: "Thing".into(),
-                description: "Desc".into(),
-                state: "Todo".into(),
-                priority_label: String::new(),
-                url: String::new(),
-            },
-        ];
+        app.modal.picker_results = vec![crate::core::linear::LinearIssue {
+            identifier: "X-1".into(),
+            title: "Thing".into(),
+            description: "Desc".into(),
+            state: "Todo".into(),
+            priority_label: String::new(),
+            url: String::new(),
+        }];
         app.modal.picker_selected = 0;
 
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
@@ -2217,11 +2252,14 @@ mod tests {
         let mut app = make_app(vec![]);
         app.mode = Mode::IssuePicker;
 
-        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE).unwrap();
-        app.handle_key(KeyCode::Char('b'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE)
+            .unwrap();
+        app.handle_key(KeyCode::Char('b'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.modal.picker_query, "ab");
 
-        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.modal.picker_query, "a");
     }
 
@@ -2232,10 +2270,12 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         assert_eq!(app.view, View::List);
 
-        app.handle_key(KeyCode::Char('v'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('v'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.view, View::Kanban);
 
-        app.handle_key(KeyCode::Char('v'), KeyModifiers::NONE).unwrap();
+        app.handle_key(KeyCode::Char('v'), KeyModifiers::NONE)
+            .unwrap();
         assert_eq!(app.view, View::List);
     }
 
@@ -2308,7 +2348,9 @@ mod tests {
         let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
         app.view = View::Kanban;
 
-        let action = app.handle_key(KeyCode::Char('t'), KeyModifiers::NONE).unwrap();
+        let action = app
+            .handle_key(KeyCode::Char('t'), KeyModifiers::NONE)
+            .unwrap();
         assert!(matches!(action, Action::Shell(1)));
     }
 
