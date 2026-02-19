@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pit — Run multiple coding agents in parallel</title>
+  <meta name="description" content="Terminal-native orchestrator for coding agents. Each task gets its own git worktree. Agents run in tmux. Switch between them without killing anything.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0b;
+      --bg-card: #111113;
+      --bg-code: #0d0d0f;
+      --border: #1e1e22;
+      --border-bright: #2a2a30;
+      --text: #e4e4e7;
+      --text-dim: #71717a;
+      --text-muted: #52525b;
+      --accent: #facc15;
+      --green: #4ade80;
+      --blue: #60a5fa;
+      --cyan: #22d3ee;
+      --red: #f87171;
+      --purple: #c084fc;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Nav ─────────────────────────────────────── */
+    nav {
+      padding: 24px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    nav .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--accent);
+      text-decoration: none;
+      letter-spacing: -0.02em;
+    }
+    .logo span { color: var(--text-muted); }
+    nav .links {
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+    nav a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.15s;
+    }
+    nav a:hover { color: var(--text); }
+    .gh-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-bright);
+      border-radius: 8px;
+      color: var(--text) !important;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: border-color 0.15s;
+    }
+    .gh-btn:hover { border-color: var(--text-muted); }
+    .gh-btn svg { width: 18px; height: 18px; fill: var(--text); }
+
+    /* ── Hero ────────────────────────────────────── */
+    .hero {
+      padding: 100px 0 80px;
+      text-align: center;
+    }
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 20px;
+    }
+    .hero h1 .highlight {
+      background: linear-gradient(135deg, var(--accent), #fbbf24);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 1.15rem;
+      color: var(--text-dim);
+      max-width: 560px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+    .hero-cta {
+      display: inline-flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      background: var(--accent);
+      color: #0a0a0b;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      background: transparent;
+      color: var(--text);
+      font-weight: 500;
+      font-size: 0.95rem;
+      border-radius: 10px;
+      border: 1px solid var(--border-bright);
+      text-decoration: none;
+      transition: border-color 0.15s;
+    }
+    .btn-secondary:hover { border-color: var(--text-muted); }
+
+    /* ── Install snippet ─────────────────────────── */
+    .install-snippet {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 24px;
+      padding: 12px 20px;
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+    }
+    .install-snippet .prompt { color: var(--text-muted); }
+    .install-snippet code { color: var(--green); }
+
+    /* ── Terminal demo ───────────────────────────── */
+    .terminal-section {
+      padding: 0 0 80px;
+    }
+    .terminal {
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+    }
+    .terminal-dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+    }
+    .terminal-dot.red { background: #ff5f57; }
+    .terminal-dot.yellow { background: #febc2e; }
+    .terminal-dot.green { background: #28c840; }
+    .terminal-title {
+      margin-left: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .terminal pre {
+      padding: 24px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.7;
+      overflow-x: auto;
+      color: var(--text-dim);
+    }
+    .terminal pre .accent { color: var(--accent); }
+    .terminal pre .green { color: var(--green); }
+    .terminal pre .blue { color: var(--blue); }
+    .terminal pre .cyan { color: var(--cyan); }
+    .terminal pre .red { color: var(--red); }
+    .terminal pre .dim { color: var(--text-muted); }
+    .terminal pre .white { color: var(--text); }
+    .terminal pre .purple { color: var(--purple); }
+
+    /* ── Section headers ─────────────────────────── */
+    .section {
+      padding: 80px 0;
+      border-top: 1px solid var(--border);
+    }
+    .section-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--accent);
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+    .section h2 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+    }
+    .section p.lead {
+      font-size: 1.05rem;
+      color: var(--text-dim);
+      max-width: 600px;
+      line-height: 1.7;
+    }
+
+    /* ── Feature grid ────────────────────────────── */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 20px;
+      margin-top: 48px;
+    }
+    .feature-card {
+      padding: 28px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      transition: border-color 0.2s;
+    }
+    .feature-card:hover { border-color: var(--border-bright); }
+    .feature-icon {
+      font-size: 1.4rem;
+      margin-bottom: 14px;
+      display: block;
+    }
+    .feature-card h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 0.88rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* ── How it works ────────────────────────────── */
+    .steps {
+      margin-top: 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 20px;
+      padding: 28px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .step:last-child { border-bottom: none; }
+    .step-num {
+      width: 40px; height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border-bright);
+      border-radius: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: var(--accent);
+    }
+    .step h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .step p {
+      font-size: 0.9rem;
+      color: var(--text-dim);
+    }
+    .step code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      background: var(--bg-code);
+      padding: 2px 8px;
+      border-radius: 4px;
+      color: var(--cyan);
+    }
+
+    /* ── Agent logos ──────────────────────────────── */
+    .agent-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 40px;
+    }
+    .agent-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .agent-pill .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    /* ── CLI reference ───────────────────────────── */
+    .cli-table {
+      margin-top: 32px;
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .cli-table td {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .cli-table td:first-child {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--cyan);
+      white-space: nowrap;
+      padding-right: 32px;
+      width: 220px;
+    }
+    .cli-table td:last-child {
+      color: var(--text-dim);
+      font-size: 0.9rem;
+    }
+
+    /* ── Integrations ────────────────────────────── */
+    .integration-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 32px;
+    }
+    .integration-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 22px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    .integration-badge .icon {
+      font-size: 1.2rem;
+    }
+
+    /* ── Footer ──────────────────────────────────── */
+    footer {
+      padding: 48px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+    footer p {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    footer a {
+      color: var(--text-dim);
+      text-decoration: none;
+    }
+    footer a:hover { color: var(--text); }
+
+    /* ── Responsive ──────────────────────────────── */
+    @media (max-width: 640px) {
+      .hero { padding: 60px 0 48px; }
+      .section { padding: 48px 0; }
+      .step { grid-template-columns: 1fr; gap: 12px; }
+      .step-num { width: 32px; height: 32px; font-size: 0.75rem; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .terminal pre { font-size: 0.72rem; padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Nav ──────────────────────────────────────────── -->
+  <nav>
+    <div class="container">
+      <a href="/" class="logo">pit<span>_</span></a>
+      <div class="links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#cli">CLI</a>
+        <a href="https://github.com/iaptsiauri/pit" class="gh-btn">
+          <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ── Hero ─────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="container">
+      <h1>Run <span class="highlight">multiple coding agents</span><br>in parallel</h1>
+      <p>Terminal-native orchestrator that gives each agent its own git worktree and tmux session. Switch between running agents instantly. Nothing dies when you look away.</p>
+      <div class="hero-cta">
+        <a href="https://github.com/iaptsiauri/pit" class="btn-primary">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="#0a0a0b"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+        <a href="#how-it-works" class="btn-secondary">See how it works</a>
+      </div>
+      <div class="install-snippet">
+        <span class="prompt">$</span>
+        <code>cargo install --git https://github.com/iaptsiauri/pit</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Terminal Demo ────────────────────────────────── -->
+  <section class="terminal-section">
+    <div class="container">
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">pit — ~/project</span>
+        </div>
+        <pre>
+<span class="dim">┌─ Tasks ─────────────┬─ Detail ──────────────────────────────────┐</span>
+<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
+<span class="dim">│</span> <span class="green">▸ ▶ fix-login-bug</span>   <span class="dim">│</span>  <span class="white"><b>fix-login-bug</b></span>                          <span class="dim">│</span>
+<span class="dim">│</span>   <span class="green">▶</span> <span class="white">add-pagination</span>  <span class="dim">│</span>  <span class="green">▶ running</span>  <span class="dim">·</span>  <span class="dim">agent: claude</span>            <span class="dim">│</span>
+<span class="dim">│</span>   <span class="blue">✓</span> <span class="white">refactor-api</span>    <span class="dim">│</span>  <span class="dim">branch:</span> <span class="cyan">pit/fix-login-bug</span>              <span class="dim">│</span>
+<span class="dim">│</span>   <span class="dim">○</span> <span class="white">update-tests</span>    <span class="dim">│</span>  <span class="dim">prompt:</span> <span class="dim">Fix the login timeout issue</span>    <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent"><b>── Commits (2) ──────────────────────</b></span>  <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent">a3f12b4</span> <span class="white">fix session timeout logic</span>      <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent">e7c9a01</span> <span class="white">add retry on auth failure</span>      <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent"><b>── Changes (3 files) ───────────────</b></span> <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">▸</span> <span class="white">src/auth.rs</span>       <span class="green">+42</span>  <span class="red">-8</span>        <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">▸</span> <span class="white">src/session.rs</span>    <span class="green">+15</span>  <span class="red">-3</span>        <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">▸</span> <span class="white">tests/auth_test.rs</span> <span class="green">+28</span>            <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">total:</span> <span class="green">+85</span>  <span class="red">-11</span>                        <span class="dim">│</span>
+<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
+<span class="dim">├─────────────────────┴───────────────────────────────────────────┤</span>
+<span class="dim">│</span> <span class="accent">Enter</span>:open  <span class="accent">l/→</span>:detail  <span class="accent">b</span>:bg  <span class="accent">n</span>:new  <span class="accent">d</span>:del  <span class="accent">r</span>:refresh  <span class="accent">q</span>:quit <span class="dim">│</span>
+<span class="dim">└─────────────────────────────────────────────────────────────────┘</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ─────────────────────────────────────── -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-tag">[ Features ]</div>
+      <h2>Everything runs, nothing blocks</h2>
+      <p class="lead">pit manages the boring parts — branching, isolation, process lifecycle — so you can focus on what each agent should actually do.</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <span class="feature-icon">🌳</span>
+          <h3>Git worktree isolation</h3>
+          <p>Every task gets its own working directory on a dedicated branch. Agents never step on each other's changes. Merge when ready.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">🪟</span>
+          <h3>tmux-backed sessions</h3>
+          <p>Agents run inside persistent tmux sessions. Switch between them freely — detach, reattach, background. Nothing gets killed.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">📋</span>
+          <h3>TUI dashboard</h3>
+          <p>A full terminal UI with split panes — task list on the left, commit history, file diffs, and change stats on the right. All keyboard-driven.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">🔗</span>
+          <h3>Issue integration</h3>
+          <p>Link tasks to GitHub or Linear issues. pit fetches the title and description, then builds the agent prompt automatically from issue context.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">⚡</span>
+          <h3>Background execution</h3>
+          <p>Run agents in detached mode with <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.82rem;">pit run &lt;task&gt;</code>. They keep working while you do something else entirely. Check back whenever.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">🔍</span>
+          <h3>Live diff viewer</h3>
+          <p>Expand any changed file right in the dashboard to see the full diff — insertions, deletions, and hunk headers — without leaving pit.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">🗄️</span>
+          <h3>SQLite state</h3>
+          <p>All task state lives in a local <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.82rem;">.pit/pit.db</code> file. No external services, no accounts, no config files to manage.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">🧹</span>
+          <h3>Automatic reaping</h3>
+          <p>pit detects when a tmux session exits and marks the task as done. No zombie processes, no stale "running" states.</p>
+        </div>
+
+        <div class="feature-card">
+          <span class="feature-icon">🎲</span>
+          <h3>Smart task names</h3>
+          <p>Skip the naming. pit generates friendly names like <em>brisk-ember</em> or <em>swift-pixel</em> so you can start working immediately.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Agents ───────────────────────────────────────── -->
+  <section class="section">
+    <div class="container">
+      <div class="section-tag">[ Agents ]</div>
+      <h2>Works with the agents you already use</h2>
+      <p class="lead">pit doesn't care which coding agent you prefer. Pick one per task, or mix them across your project.</p>
+
+      <div class="agent-grid">
+        <div class="agent-pill"><span class="dot"></span> Claude Code</div>
+        <div class="agent-pill"><span class="dot"></span> Codex</div>
+        <div class="agent-pill"><span class="dot"></span> Amp</div>
+        <div class="agent-pill"><span class="dot"></span> Aider</div>
+        <div class="agent-pill"><span class="dot" style="background:var(--purple)"></span> Custom</div>
+      </div>
+
+      <div class="integration-row" style="margin-top:40px;">
+        <div class="integration-badge"><span class="icon">🐙</span> GitHub Issues</div>
+        <div class="integration-badge"><span class="icon">📐</span> Linear</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── How It Works ─────────────────────────────────── -->
+  <section class="section" id="how-it-works">
+    <div class="container">
+      <div class="section-tag">[ How it works ]</div>
+      <h2>Three commands to parallel agents</h2>
+      <p class="lead">No configuration files. No YAML. Just git, tmux, and a single binary.</p>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div>
+            <h3>Initialize in your repo</h3>
+            <p>Run <code>pit init</code> to create a <code>.pit/</code> directory with a local SQLite database. It auto-adds itself to <code>.gitignore</code>.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div>
+            <h3>Create tasks</h3>
+            <p>Run <code>pit new fix-login-bug</code> — pit creates a git branch, checks out a worktree, and records the task. Add a prompt, link an issue, or pick an agent.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div>
+            <h3>Launch the dashboard</h3>
+            <p>Run <code>pit</code> to open the TUI. Press <code>Enter</code> on any task to drop into its agent session. Press <code>Ctrl-b d</code> to detach and switch to another. All agents keep running.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CLI Reference ────────────────────────────────── -->
+  <section class="section" id="cli">
+    <div class="container">
+      <div class="section-tag">[ CLI ]</div>
+      <h2>Full command reference</h2>
+      <p class="lead">Everything is available from the command line. The TUI is optional.</p>
+
+      <table class="cli-table">
+        <tr>
+          <td>pit</td>
+          <td>Launch the interactive TUI dashboard</td>
+        </tr>
+        <tr>
+          <td>pit init</td>
+          <td>Initialize pit in the current git repository</td>
+        </tr>
+        <tr>
+          <td>pit new &lt;name&gt;</td>
+          <td>Create a new task with its own branch and worktree. Flags: <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.8rem;">-p</code> prompt, <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.8rem;">-i</code> issue URL, <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.8rem;">-a</code> agent</td>
+        </tr>
+        <tr>
+          <td>pit list</td>
+          <td>List all tasks with their status and branch</td>
+        </tr>
+        <tr>
+          <td>pit status</td>
+          <td>Show live task status with automatic reaping of finished agents</td>
+        </tr>
+        <tr>
+          <td>pit run &lt;name&gt;</td>
+          <td>Run a task in a detached tmux session (background mode)</td>
+        </tr>
+        <tr>
+          <td>pit stop &lt;name&gt;</td>
+          <td>Kill a running task's tmux session</td>
+        </tr>
+        <tr>
+          <td>pit diff &lt;name&gt;</td>
+          <td>Show the diff between a task's worktree and the main branch</td>
+        </tr>
+        <tr>
+          <td>pit delete &lt;name&gt;</td>
+          <td>Remove a task, its worktree, and its branch</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Requirements ─────────────────────────────────── -->
+  <section class="section">
+    <div class="container">
+      <div class="section-tag">[ Requirements ]</div>
+      <h2>Minimal dependencies</h2>
+      <p class="lead">pit is a single Rust binary. It needs two things you probably already have.</p>
+
+      <div class="feature-grid" style="grid-template-columns: repeat(3, 1fr); margin-top: 32px;">
+        <div class="feature-card" style="text-align:center;">
+          <span class="feature-icon">🦀</span>
+          <h3>Rust</h3>
+          <p>Built with Cargo. Install from source or use a prebuilt binary.</p>
+        </div>
+        <div class="feature-card" style="text-align:center;">
+          <span class="feature-icon">📂</span>
+          <h3>Git</h3>
+          <p>Worktrees require Git 2.5+. You almost certainly have it.</p>
+        </div>
+        <div class="feature-card" style="text-align:center;">
+          <span class="feature-icon">🪟</span>
+          <h3>tmux</h3>
+          <p>Agent sessions run inside tmux. <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.82rem;">brew install tmux</code> on macOS.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Footer ───────────────────────────────────────── -->
+  <footer>
+    <div class="container">
+      <p style="margin-bottom:8px;">
+        <a href="https://github.com/iaptsiauri/pit" style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-weight:600;">pit</a> — MIT License
+      </p>
+      <p>Built by <a href="https://github.com/iaptsiauri">@iaptsiauri</a></p>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -1,4 +1,7 @@
 pub mod git_info;
+pub mod github;
+pub mod issues;
+pub mod linear;
 pub mod names;
 pub mod project;
 pub mod reap;

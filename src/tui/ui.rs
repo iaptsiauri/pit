@@ -383,7 +383,7 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
     let modal_width = 64u16.min(area.width.saturating_sub(4));
-    let modal_height = 19u16.min(area.height.saturating_sub(2));
+    let modal_height = 21u16.min(area.height.saturating_sub(2));
 
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -484,7 +484,23 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     if m.field == ModalField::Issue {
         frame.set_cursor_position((inner.x + 2 + m.issue.len() as u16, y));
     }
-    y += 2;
+    y += 1;
+
+    // Issue fetch status
+    if let Some(ref status) = m.issue_status {
+        let status_style = if status.starts_with('✓') {
+            Style::default().fg(Color::Green)
+        } else if status.starts_with('✗') {
+            Style::default().fg(Color::Red)
+        } else if status.starts_with('⟳') {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let status_widget = Paragraph::new(Span::styled(format!("  {}", status), status_style));
+        frame.render_widget(status_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    }
+    y += 1;
 
     // --- Auto-approve ---
     let aa_active = m.field == ModalField::AutoApprove;

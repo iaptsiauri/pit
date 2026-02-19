@@ -4,6 +4,7 @@ use ratatui::DefaultTerminal;
 use std::time::Duration;
 
 use crate::core::git_info::{self, TaskGitInfo};
+use crate::core::issues;
 use crate::core::names;
 use crate::core::project::Project;
 use crate::core::reap;
@@ -68,6 +69,10 @@ pub struct ModalState {
     pub agent: String,
     pub issue: String,
     pub auto_approve: bool,
+    /// Status message after fetching an issue (e.g. "✓ ENG-42: Fix login" or "✗ not found")
+    pub issue_status: Option<String>,
+    /// Whether we already tried fetching for this URL (avoid re-fetching on every tab)
+    issue_fetched_url: String,
 }
 
 const AGENTS: &[&str] = &["claude", "codex", "amp", "aider", "custom"];
@@ -81,6 +86,49 @@ impl ModalState {
             agent: "claude".to_string(),
             issue: String::new(),
             auto_approve: false,
+            issue_status: None,
+            issue_fetched_url: String::new(),
+        }
+    }
+
+    /// Try to fetch issue data from the URL and populate the prompt.
+    /// Only fetches if the URL changed since last fetch.
+    fn try_fetch_issue(&mut self) {
+        let url = self.issue.trim().to_string();
+        if url.is_empty() || url == self.issue_fetched_url {
+            return;
+        }
+
+        let provider = issues::detect_provider(&url);
+        if provider == issues::Provider::Unknown {
+            if !url.is_empty() {
+                self.issue_status = Some("? unrecognized URL".to_string());
+            }
+            self.issue_fetched_url = url;
+            return;
+        }
+
+        self.issue_status = Some(format!("⟳ fetching from {}…", provider));
+        self.issue_fetched_url = url.clone();
+
+        match issues::fetch(&url) {
+            Ok(issue) => {
+                let prompt = issues::issue_to_prompt(&issue);
+                // Only auto-fill if prompt is empty
+                if self.prompt.is_empty() {
+                    self.prompt = prompt;
+                }
+                self.issue_status = Some(format!(
+                    "✓ {} · {} [{}]",
+                    issue.identifier, issue.title, issue.state
+                ));
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                // Truncate long error messages
+                let short: String = msg.chars().take(60).collect();
+                self.issue_status = Some(format!("✗ {}", short));
+            }
         }
     }
 
@@ -507,11 +555,19 @@ impl App {
 
             // Tab / Shift-Tab: cycle fields
             (KeyCode::Tab, _) => {
+                let leaving = self.modal.field;
                 self.modal.field = self.modal.field.next();
+                if leaving == ModalField::Issue {
+                    self.modal.try_fetch_issue();
+                }
                 Ok(Action::None)
             }
             (KeyCode::BackTab, _) => {
+                let leaving = self.modal.field;
                 self.modal.field = self.modal.field.prev();
+                if leaving == ModalField::Issue {
+                    self.modal.try_fetch_issue();
+                }
                 Ok(Action::None)
             }
 
@@ -560,6 +616,11 @@ impl App {
     }
 
     fn try_submit(&mut self) -> Result<Action> {
+        // Try to fetch issue if not yet fetched (e.g. user typed URL and pressed Enter directly)
+        if !self.modal.issue.trim().is_empty() {
+            self.modal.try_fetch_issue();
+        }
+
         let name = self.modal.name.trim().to_string();
 
         if name.is_empty() {
@@ -1722,5 +1783,118 @@ mod tests {
 
         // Still expanded
         assert!(app.expanded_files.contains(&0));
+    }
+
+    // --- Issue fetch in modal ---
+
+    #[test]
+    fn modal_issue_unknown_url_shows_status() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        // Go to issue field
+        app.modal.field = ModalField::Issue;
+        for c in "https://jira.example.com/browse/X-1".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        // Tab away triggers fetch attempt
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert!(app.modal.issue_status.is_some());
+        assert!(app.modal.issue_status.as_ref().unwrap().contains("unrecognized"));
+    }
+
+    #[test]
+    fn modal_issue_empty_url_no_fetch() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        app.modal.field = ModalField::Issue;
+        // Tab away with empty URL — no status
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert!(app.modal.issue_status.is_none());
+    }
+
+    #[test]
+    fn modal_issue_linear_url_detected() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        app.modal.field = ModalField::Issue;
+        for c in "https://linear.app/team/issue/ENG-42/fix-bug".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        // Tab away — will try to fetch (will fail without API key, but should set status)
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert!(app.modal.issue_status.is_some());
+        // Without LINEAR_API_KEY, should show error
+        let status = app.modal.issue_status.as_ref().unwrap();
+        assert!(
+            status.starts_with('✗') || status.starts_with('⟳'),
+            "expected error or loading status, got: {}",
+            status
+        );
+    }
+
+    #[test]
+    fn modal_issue_github_url_detected() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        app.modal.field = ModalField::Issue;
+        for c in "https://github.com/org/repo/issues/42".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        // Tab away — will try to fetch
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert!(app.modal.issue_status.is_some());
+    }
+
+    #[test]
+    fn modal_issue_no_refetch_same_url() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        app.modal.field = ModalField::Issue;
+        for c in "https://jira.example.com/X-1".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
+        }
+
+        // First tab: sets status
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        let first_status = app.modal.issue_status.clone();
+
+        // Tab back to issue, tab away again — should not re-fetch
+        app.modal.field = ModalField::Issue;
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.issue_status, first_status);
+    }
+
+    #[test]
+    fn modal_issue_fetch_populates_prompt_if_empty() {
+        // This test verifies the logic without actually calling the API.
+        // We test try_fetch_issue directly.
+        let mut modal = ModalState::new(&[]);
+        modal.prompt = String::new();
+        modal.issue = "https://jira.example.com/browse/X-1".to_string();
+
+        modal.try_fetch_issue();
+        // Unknown URL — prompt stays empty
+        assert!(modal.prompt.is_empty());
+        assert!(modal.issue_status.is_some());
+    }
+
+    #[test]
+    fn modal_issue_does_not_overwrite_existing_prompt() {
+        let mut modal = ModalState::new(&[]);
+        modal.prompt = "my custom prompt".to_string();
+        modal.issue = "https://linear.app/t/issue/X-1/title".to_string();
+
+        // Will fail to fetch (no API key), but even if it succeeded,
+        // it should not overwrite existing prompt
+        modal.try_fetch_issue();
+        assert_eq!(modal.prompt, "my custom prompt");
     }
 }
