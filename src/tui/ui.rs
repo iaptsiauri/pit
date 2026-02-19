@@ -468,7 +468,38 @@ fn draw_modal(frame: &mut Frame, app: &App) {
         Span::styled(arrows_r, Style::default().fg(Color::DarkGray)),
     ]));
     frame.render_widget(agent_widget, Rect { x: inner.x, y, width: fw, height: 1 });
-    y += 2;
+    y += 1;
+
+    // --- Auto-approve ---
+    let aa_active = m.field == ModalField::AutoApprove;
+    let aa_label_style = if aa_active {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let check = if m.auto_approve { "✓" } else { " " };
+    let check_style = if m.auto_approve {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else if aa_active {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let marker = if aa_active { "▸" } else { " " };
+    let aa_widget = Paragraph::new(Line::from(vec![
+        Span::styled(format!("{} ", marker), aa_label_style),
+        Span::styled(format!("[{}]", check), check_style),
+        Span::styled(" Auto-approve ", aa_label_style),
+        Span::styled("— skip permission prompts", Style::default().fg(Color::DarkGray)),
+    ]));
+    frame.render_widget(aa_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    y += 1;
+
+    // --- Separator ---
+    let sep = "─".repeat(fw as usize);
+    let sep_widget = Paragraph::new(Span::styled(&sep, Style::default().fg(Color::DarkGray)));
+    frame.render_widget(sep_widget, Rect { x: inner.x, y, width: fw, height: 1 });
+    y += 1;
 
     // --- Issue ---
     let issue_active = m.field == ModalField::Issue;
@@ -482,7 +513,6 @@ fn draw_modal(frame: &mut Frame, app: &App) {
     y += 1;
 
     if let Some(ref status) = m.issue_status {
-        // Show selected issue info
         let status_style = if status.starts_with('✓') {
             Style::default().fg(Color::Green)
         } else {
@@ -491,7 +521,6 @@ fn draw_modal(frame: &mut Frame, app: &App) {
         let status_widget = Paragraph::new(Span::styled(format!("  {}", status), status_style));
         frame.render_widget(status_widget, Rect { x: inner.x, y, width: fw, height: 1 });
     } else {
-        // Show hint
         let hint = if issue_active {
             Line::from(vec![
                 Span::styled("  Press ", Style::default().fg(Color::DarkGray)),
@@ -505,29 +534,6 @@ fn draw_modal(frame: &mut Frame, app: &App) {
         };
         frame.render_widget(Paragraph::new(hint), Rect { x: inner.x, y, width: fw, height: 1 });
     }
-    y += 1;
-
-    // --- Auto-approve ---
-    let aa_active = m.field == ModalField::AutoApprove;
-    let aa_label_style = if aa_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let check = if m.auto_approve { "✓" } else { " " };
-    let check_style = if m.auto_approve {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let marker = if aa_active { "▸" } else { " " };
-    let aa_widget = Paragraph::new(Line::from(vec![
-        Span::styled(format!("{} ", marker), aa_label_style),
-        Span::styled(format!("[{}] ", check), check_style),
-        Span::styled("Auto-approve", aa_label_style),
-        Span::styled("  skip permission prompts", Style::default().fg(Color::DarkGray)),
-    ]));
-    frame.render_widget(aa_widget, Rect { x: inner.x, y, width: fw, height: 1 });
 }
 
 fn draw_field_label(frame: &mut Frame, x: u16, y: u16, w: u16, label: &str, active: bool) {

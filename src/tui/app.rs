@@ -42,8 +42,8 @@ impl ModalField {
         ModalField::Name,
         ModalField::Prompt,
         ModalField::Agent,
-        ModalField::Issue,
         ModalField::AutoApprove,
+        ModalField::Issue,
     ];
 
     pub fn next(self) -> Self {
@@ -1153,10 +1153,10 @@ mod tests {
         assert_eq!(app.modal.field, ModalField::Agent);
 
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.field, ModalField::Issue);
+        assert_eq!(app.modal.field, ModalField::AutoApprove);
 
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.field, ModalField::AutoApprove);
+        assert_eq!(app.modal.field, ModalField::Issue);
 
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.field, ModalField::Name); // wraps
@@ -1168,10 +1168,10 @@ mod tests {
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
         app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.field, ModalField::AutoApprove);
+        assert_eq!(app.modal.field, ModalField::Issue);
 
         app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.field, ModalField::Issue);
+        assert_eq!(app.modal.field, ModalField::AutoApprove);
     }
 
     #[test]
