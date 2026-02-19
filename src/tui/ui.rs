@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::core::task::Status;
 
-use super::app::{App, ModalField, Mode, Pane};
+use super::app::{App, ModalField, Mode, Pane, View};
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -14,16 +14,23 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Min(5), Constraint::Length(3)])
         .split(frame.area());
 
-    // Split the main area into task list (left) and detail (right)
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(chunks[0]);
+    match app.view {
+        View::List => {
+            let panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .split(chunks[0]);
 
-    let list_focused = app.focus == Pane::TaskList && app.mode == Mode::Normal;
-    let detail_focused = app.focus == Pane::Detail && app.mode == Mode::Normal;
-    draw_task_list(frame, app, panes[0], list_focused);
-    draw_detail_pane(frame, app, panes[1], detail_focused);
+            let list_focused = app.focus == Pane::TaskList && app.mode == Mode::Normal;
+            let detail_focused = app.focus == Pane::Detail && app.mode == Mode::Normal;
+            draw_task_list(frame, app, panes[0], list_focused);
+            draw_detail_pane(frame, app, panes[1], detail_focused);
+        }
+        View::Kanban => {
+            draw_kanban(frame, app, chunks[0]);
+        }
+    }
+
     draw_help_bar(frame, app, chunks[1]);
 
     if app.mode == Mode::NewTask {
@@ -382,6 +389,95 @@ fn digit_count(n: usize) -> usize {
 }
 
 // ── Modal ───────────────────────────────────────────────────────────────────
+
+// ── Kanban view ─────────────────────────────────────────────────────────
+
+fn draw_kanban(frame: &mut Frame, app: &App, area: Rect) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+        ])
+        .split(area);
+
+    let headers = [
+        ("○ Idle", Color::White),
+        ("▶ Running", Color::Green),
+        ("✓ Done", Color::Blue),
+    ];
+
+    for (col_idx, (header, color)) in headers.iter().enumerate() {
+        let is_focused = app.kanban_col == col_idx && app.mode == Mode::Normal;
+        let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+
+        let tasks = app.kanban_column_tasks(col_idx);
+        let count = tasks.len();
+
+        let title = format!(" {} ({}) ", header, count);
+        let block = Block::default()
+            .title(title)
+            .title_style(Style::default().fg(*color).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+
+        let inner = block.inner(columns[col_idx]);
+        frame.render_widget(block, columns[col_idx]);
+
+        let selected_row = app.kanban_row[col_idx];
+
+        for (i, task) in tasks.iter().enumerate() {
+            let y = inner.y + (i as u16) * 2;
+            if y + 1 >= inner.y + inner.height {
+                break;
+            }
+
+            let is_selected = is_focused && i == selected_row;
+            let marker = if is_selected { "▸ " } else { "  " };
+
+            let name_style = if is_selected {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+
+            let bg = if is_selected {
+                Style::default().bg(Color::Rgb(40, 40, 50))
+            } else {
+                Style::default()
+            };
+
+            // Line 1: marker + name
+            let name_line = Line::from(vec![
+                Span::styled(marker, bg),
+                Span::styled(&task.name, name_style.patch(bg)),
+            ]);
+            frame.render_widget(
+                Paragraph::new(name_line),
+                Rect { x: inner.x, y, width: inner.width, height: 1 },
+            );
+
+            // Line 2: agent + extra info
+            let agent_span = Span::styled(
+                format!("  {}", task.agent),
+                Style::default().fg(Color::DarkGray).patch(bg),
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(agent_span)),
+                Rect { x: inner.x, y: y + 1, width: inner.width, height: 1 },
+            );
+        }
+
+        if tasks.is_empty() {
+            let empty = Paragraph::new(Span::styled(
+                "  (empty)",
+                Style::default().fg(Color::DarkGray),
+            ));
+            frame.render_widget(empty, Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 });
+        }
+    }
+}
 
 fn draw_modal(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -793,6 +889,28 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw(":cancel"),
         ])
+    } else if app.view == View::Kanban {
+        Line::from(vec![
+            Span::styled(
+                " ←/→",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(":column  "),
+            Span::styled("↑/↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":select  "),
+            Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":open  "),
+            Span::styled("t", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":shell  "),
+            Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":new  "),
+            Span::styled("d", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":del  "),
+            Span::styled("v", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(":list  "),
+            Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(":quit"),
+        ])
     } else if app.focus == Pane::Detail {
         Line::from(vec![
             Span::styled(
@@ -804,6 +922,8 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(":expand diff  "),
             Span::styled("h/←", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":back  "),
+            Span::styled("v", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(":kanban  "),
             Span::styled("n", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":new  "),
             Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
@@ -826,6 +946,8 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(":new  "),
             Span::styled("d", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":del  "),
+            Span::styled("v", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(":kanban  "),
             Span::styled("r", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(":refresh  "),
             Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),

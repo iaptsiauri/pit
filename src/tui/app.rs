@@ -20,6 +20,15 @@ pub enum Mode {
     IssuePicker,
 }
 
+/// Which view layout is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    /// Split pane: task list (left) + detail (right)
+    List,
+    /// Kanban: three columns (Idle, Running, Done)
+    Kanban,
+}
+
 /// Which pane has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -174,6 +183,7 @@ pub struct App {
     pub selected: usize,
     pub should_quit: bool,
     pub mode: Mode,
+    pub view: View,
     pub focus: Pane,
     pub modal: ModalState,
     pub error: Option<String>,
@@ -194,6 +204,10 @@ pub struct App {
     pub expanded_files: std::collections::HashSet<usize>,
     /// Cached file diffs (file index → diff lines).
     pub file_diffs: std::collections::HashMap<usize, Vec<String>>,
+    /// Kanban: which column is focused (0=Idle, 1=Running, 2=Done)
+    pub kanban_col: usize,
+    /// Kanban: selected row within each column
+    pub kanban_row: [usize; 3],
 }
 
 impl App {
@@ -205,6 +219,7 @@ impl App {
             selected: 0,
             should_quit: false,
             mode: Mode::Normal,
+            view: View::List,
             focus: Pane::TaskList,
             modal: ModalState::new(&existing),
             error: None,
@@ -217,6 +232,8 @@ impl App {
             diff_line: None,
             expanded_files: std::collections::HashSet::new(),
             file_diffs: std::collections::HashMap::new(),
+            kanban_col: 0,
+            kanban_row: [0, 0, 0],
         };
         app.refresh_detail();
         Ok(app)
@@ -287,9 +304,23 @@ impl App {
                 self.force_refresh_detail();
                 return Ok(Action::None);
             }
+            (KeyCode::Char('v'), _) => {
+                self.view = match self.view {
+                    View::List => View::Kanban,
+                    View::Kanban => View::List,
+                };
+                return Ok(Action::None);
+            }
             _ => {}
         }
 
+        match self.view {
+            View::List => self.handle_list_view_key(code, modifiers),
+            View::Kanban => self.handle_kanban_key(code, modifiers),
+        }
+    }
+
+    fn handle_list_view_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
         // Pane switching
         match (code, modifiers) {
             (KeyCode::Right | KeyCode::Char('l'), _) if self.focus == Pane::TaskList => {
@@ -301,7 +332,6 @@ impl App {
                 return Ok(Action::None);
             }
             (KeyCode::Esc, _) if self.focus == Pane::Detail => {
-                // Layered escape: diff_line → collapse file → deselect file → switch pane
                 if self.diff_line.is_some() {
                     self.diff_line = None;
                 } else if let Some(idx) = self.file_cursor {
@@ -318,10 +348,87 @@ impl App {
             _ => {}
         }
 
-        // Pane-specific keys
         match self.focus {
             Pane::TaskList => self.handle_tasklist_key(code, modifiers),
             Pane::Detail => self.handle_detail_key(code, modifiers),
+        }
+    }
+
+    /// Get tasks for a kanban column (0=Idle, 1=Running, 2=Done).
+    pub fn kanban_column_tasks(&self, col: usize) -> Vec<&Task> {
+        let status = match col {
+            0 => task::Status::Idle,
+            1 => task::Status::Running,
+            _ => task::Status::Done,
+        };
+        self.tasks.iter().filter(|t| t.status == status).collect()
+    }
+
+    /// Get the selected task in the current kanban column.
+    fn kanban_selected_task(&self) -> Option<&Task> {
+        let tasks = self.kanban_column_tasks(self.kanban_col);
+        tasks.get(self.kanban_row[self.kanban_col]).copied()
+    }
+
+    fn handle_kanban_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
+        match (code, modifiers) {
+            // Navigate within column
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
+                if self.kanban_row[self.kanban_col] > 0 {
+                    self.kanban_row[self.kanban_col] -= 1;
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
+                let count = self.kanban_column_tasks(self.kanban_col).len();
+                if count > 0 && self.kanban_row[self.kanban_col] < count - 1 {
+                    self.kanban_row[self.kanban_col] += 1;
+                }
+                Ok(Action::None)
+            }
+            // Navigate between columns
+            (KeyCode::Left | KeyCode::Char('h'), _) => {
+                if self.kanban_col > 0 {
+                    self.kanban_col -= 1;
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Right | KeyCode::Char('l'), _) => {
+                if self.kanban_col < 2 {
+                    self.kanban_col += 1;
+                }
+                Ok(Action::None)
+            }
+            // Actions on selected task
+            (KeyCode::Enter, _) => {
+                if let Some(t) = self.kanban_selected_task() {
+                    Ok(Action::Enter(t.id))
+                } else {
+                    Ok(Action::None)
+                }
+            }
+            (KeyCode::Char('t'), _) => {
+                if let Some(t) = self.kanban_selected_task() {
+                    Ok(Action::Shell(t.id))
+                } else {
+                    Ok(Action::None)
+                }
+            }
+            (KeyCode::Char('b'), _) => {
+                if let Some(t) = self.kanban_selected_task() {
+                    Ok(Action::Background(t.id))
+                } else {
+                    Ok(Action::None)
+                }
+            }
+            (KeyCode::Char('d'), _) => {
+                if let Some(t) = self.kanban_selected_task() {
+                    Ok(Action::Delete(t.id))
+                } else {
+                    Ok(Action::None)
+                }
+            }
+            _ => Ok(Action::None),
         }
     }
 
@@ -1028,6 +1135,7 @@ mod tests {
             selected: 0,
             should_quit: false,
             mode: Mode::Normal,
+            view: View::List,
             focus: Pane::TaskList,
             modal: ModalState::new(&existing),
             error: None,
@@ -1041,6 +1149,8 @@ mod tests {
             diff_line: None,
             expanded_files: std::collections::HashSet::new(),
             file_diffs: std::collections::HashMap::new(),
+            kanban_col: 0,
+            kanban_row: [0, 0, 0],
         }
     }
 
@@ -2113,5 +2223,116 @@ mod tests {
 
         app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.picker_query, "a");
+    }
+
+    // --- Kanban ---
+
+    #[test]
+    fn v_toggles_kanban() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        assert_eq!(app.view, View::List);
+
+        app.handle_key(KeyCode::Char('v'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.view, View::Kanban);
+
+        app.handle_key(KeyCode::Char('v'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.view, View::List);
+    }
+
+    #[test]
+    fn kanban_column_navigation() {
+        let mut app = make_app(vec![
+            make_task(1, "a", task::Status::Idle),
+            make_task(2, "b", task::Status::Running),
+            make_task(3, "c", task::Status::Done),
+        ]);
+        app.view = View::Kanban;
+        assert_eq!(app.kanban_col, 0);
+
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_col, 1);
+
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_col, 2);
+
+        // Can't go past last column
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_col, 2);
+
+        app.handle_key(KeyCode::Left, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_col, 1);
+    }
+
+    #[test]
+    fn kanban_row_navigation() {
+        let mut app = make_app(vec![
+            make_task(1, "a", task::Status::Idle),
+            make_task(2, "b", task::Status::Idle),
+            make_task(3, "c", task::Status::Idle),
+        ]);
+        app.view = View::Kanban;
+        assert_eq!(app.kanban_row[0], 0);
+
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_row[0], 1);
+
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_row[0], 2);
+
+        // Can't go past last row
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_row[0], 2);
+
+        app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_row[0], 1);
+    }
+
+    #[test]
+    fn kanban_enter_on_selected() {
+        let mut app = make_app(vec![
+            make_task(1, "idle-one", task::Status::Idle),
+            make_task(2, "running-one", task::Status::Running),
+        ]);
+        app.view = View::Kanban;
+
+        // Select running column
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.kanban_col, 1);
+
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::Enter(2)));
+    }
+
+    #[test]
+    fn kanban_shell_on_selected() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.view = View::Kanban;
+
+        let action = app.handle_key(KeyCode::Char('t'), KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::Shell(1)));
+    }
+
+    #[test]
+    fn kanban_empty_column_enter_is_noop() {
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
+        app.view = View::Kanban;
+
+        // Move to Running column (empty)
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn kanban_column_tasks_filters() {
+        let app = make_app(vec![
+            make_task(1, "a", task::Status::Idle),
+            make_task(2, "b", task::Status::Running),
+            make_task(3, "c", task::Status::Done),
+            make_task(4, "d", task::Status::Idle),
+        ]);
+        assert_eq!(app.kanban_column_tasks(0).len(), 2); // idle
+        assert_eq!(app.kanban_column_tasks(1).len(), 1); // running
+        assert_eq!(app.kanban_column_tasks(2).len(), 1); // done
     }
 }
