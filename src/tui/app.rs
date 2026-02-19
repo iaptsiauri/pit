@@ -464,13 +464,6 @@ impl App {
                     Ok(Action::None)
                 }
             }
-            (KeyCode::Char('b'), _) => {
-                if let Some(t) = self.kanban_selected_task() {
-                    Ok(Action::Background(t.id))
-                } else {
-                    Ok(Action::None)
-                }
-            }
             (KeyCode::Char('d'), _) => {
                 if let Some(t) = self.kanban_selected_task() {
                     Ok(Action::Delete(t.id))
@@ -501,13 +494,6 @@ impl App {
             (KeyCode::Enter, _) => {
                 if let Some(t) = self.tasks.get(self.selected) {
                     Ok(Action::Enter(t.id))
-                } else {
-                    Ok(Action::None)
-                }
-            }
-            (KeyCode::Char('b'), _) => {
-                if let Some(t) = self.tasks.get(self.selected) {
-                    Ok(Action::Background(t.id))
                 } else {
                     Ok(Action::None)
                 }
@@ -808,13 +794,6 @@ impl App {
                     self.file_cursor = Some(nfiles - 1);
                 }
                 Ok(Action::None)
-            }
-            (KeyCode::Char('b'), _) => {
-                if let Some(t) = self.tasks.get(self.selected) {
-                    Ok(Action::Background(t.id))
-                } else {
-                    Ok(Action::None)
-                }
             }
             (KeyCode::Char('d'), _) => {
                 if let Some(t) = self.tasks.get(self.selected) {
@@ -1189,7 +1168,6 @@ impl App {
 pub enum Action {
     None,
     Enter(i64),
-    Background(i64),
     Delete(i64),
     Shell(i64),
     CreateTask {
@@ -1233,10 +1211,6 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                         ratatui::restore();
                         handle_enter(app, task_id)?;
                         *terminal = ratatui::init();
-                        app.refresh()?;
-                    }
-                    Action::Background(task_id) => {
-                        handle_background(app, task_id)?;
                         app.refresh()?;
                     }
                     Action::Delete(task_id) => {
@@ -1421,13 +1395,6 @@ fn handle_enter(app: &mut App, task_id: i64) -> Result<()> {
     Ok(())
 }
 
-fn handle_background(app: &mut App, task_id: i64) -> Result<()> {
-    let db = crate::db::open(&app.db_path)?;
-    let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
-    launch_task(&db, &task)?;
-    Ok(())
-}
-
 fn handle_shell(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
@@ -1581,15 +1548,6 @@ mod tests {
         let mut app = make_app(vec![]);
         let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert!(matches!(action, Action::None));
-    }
-
-    #[test]
-    fn background_returns_task_id() {
-        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle)]);
-        let action = app
-            .handle_key(KeyCode::Char('b'), KeyModifiers::NONE)
-            .unwrap();
-        assert!(matches!(action, Action::Background(1)));
     }
 
     #[test]
