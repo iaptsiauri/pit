@@ -219,7 +219,7 @@ impl App {
 
     fn refresh(&mut self) -> Result<()> {
         let db = crate::db::open(&self.db_path)?;
-        reap::reap_dead(&db)?;
+        reap::reap_dead(&db, &self.repo_root)?;
         self.tasks = task::list(&db)?;
         if !self.tasks.is_empty() && self.selected >= self.tasks.len() {
             self.selected = self.tasks.len() - 1;
@@ -596,6 +596,18 @@ impl App {
         }
         line += 1; // blank
 
+        // Checkpoints section (if any)
+        if let Some(task) = self.tasks.get(self.selected) {
+            let cp_count = checkpoint::list(&self.repo_root, &task.name)
+                .map(|c| c.len())
+                .unwrap_or(0);
+            if cp_count > 0 {
+                line += 1; // "── Checkpoints (N) ──"
+                line += cp_count; // one line per checkpoint
+                line += 1; // blank
+            }
+        }
+
         // Files header
         line += 1; // "── Changes (N file(s)) ──"
 
@@ -813,7 +825,8 @@ impl App {
             }
             (KeyCode::Char('c'), _) => {
                 if let Some(t) = self.tasks.get(self.selected) {
-                    match checkpoint::create(&self.repo_root, &t.name, &t.branch) {
+                    let worktree = std::path::Path::new(&t.worktree);
+                    match checkpoint::create(&self.repo_root, &t.name, &t.branch, worktree) {
                         Ok(idx) => {
                             self.error = Some(format!("✓ Checkpoint #{} saved", idx));
                             self.force_refresh_detail();

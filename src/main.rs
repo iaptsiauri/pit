@@ -209,7 +209,7 @@ fn cmd_new(name: &str, description: &str, prompt: &str, issue: &str, agent: &str
 
 fn cmd_list() -> Result<()> {
     let project = open_project()?;
-    reap::reap_dead(&project.db)?;
+    reap::reap_dead(&project.db, &project.repo_root)?;
     let tasks = task::list(&project.db)?;
 
     if tasks.is_empty() {
@@ -228,7 +228,7 @@ fn cmd_list() -> Result<()> {
 
 fn cmd_status() -> Result<()> {
     let project = open_project()?;
-    let reaped = reap::reap_dead(&project.db)?;
+    let reaped = reap::reap_dead(&project.db, &project.repo_root)?;
     let tasks = task::list(&project.db)?;
 
     if tasks.is_empty() {
@@ -362,7 +362,8 @@ fn cmd_checkpoint(name: &str) -> Result<()> {
     let t = task::get_by_name(&project.db, name)?
         .ok_or_else(|| anyhow::anyhow!("task '{}' not found", name))?;
 
-    let idx = core::checkpoint::create(&project.repo_root, &t.name, &t.branch)?;
+    let worktree = std::path::Path::new(&t.worktree);
+    let idx = core::checkpoint::create(&project.repo_root, &t.name, &t.branch, worktree)?;
 
     // List all checkpoints to show context
     let checkpoints = core::checkpoint::list(&project.repo_root, &t.name)?;

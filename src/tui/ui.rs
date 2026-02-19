@@ -311,6 +311,45 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
 
         lines.push(Line::from(""));
 
+        // Checkpoints section
+        if let Some(task) = app.tasks.get(app.selected) {
+            let checkpoints =
+                crate::core::checkpoint::list(&app.repo_root, &task.name).unwrap_or_default();
+            if !checkpoints.is_empty() {
+                let cp_count = checkpoints.len();
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("── Checkpoints ({}) ", cp_count),
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "─".repeat(w.saturating_sub(19 + digit_count(cp_count))),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+                for cp in &checkpoints {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  #{} ", cp.index),
+                            Style::default().fg(Color::Magenta),
+                        ),
+                        Span::styled(cp.commit_hash.clone(), Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            format!(" {}", cp.message),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled(
+                            format!("  {}", cp.timestamp),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+                lines.push(Line::from(""));
+            }
+        }
+
         // Files changed section
         let file_count = info.files.len();
         lines.push(Line::from(vec![
