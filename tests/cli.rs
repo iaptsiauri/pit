@@ -495,6 +495,78 @@ fn status_reaps_dead_sessions() {
 }
 
 #[test]
+fn config_path_shows_path() {
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("config.toml"));
+}
+
+#[test]
+fn config_list_empty() {
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Example"));
+}
+
+#[test]
+fn config_set_get_unset() {
+    // Set
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "set", "test.value", "hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Set test.value"));
+
+    // Get
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "get", "test.value"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hello"));
+
+    // Unset
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "unset", "test.value"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    // Get again — should be gone
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "get", "test.value"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not set"));
+}
+
+#[test]
+fn config_masks_secrets() {
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "set", "linear.api_key", "lin_api_very_secret_key_12345"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("lin_...2345"));
+
+    // Clean up
+    Command::cargo_bin("pit")
+        .unwrap()
+        .args(["config", "unset", "linear.api_key"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn list_also_reaps() {
     let repo = make_git_repo();
     init_repo_with_task(&repo, "reap-list");

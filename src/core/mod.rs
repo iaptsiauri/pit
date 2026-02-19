@@ -1,3 +1,4 @@
+pub mod config;
 pub mod git_info;
 pub mod github;
 pub mod issues;

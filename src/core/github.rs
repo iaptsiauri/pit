@@ -71,7 +71,7 @@ pub fn fetch_issue(issue_ref: &GitHubIssueRef) -> Result<GitHubIssue> {
         .set("User-Agent", "pit-cli")
         .set("Accept", "application/vnd.github+json");
 
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+    if let Some(token) = super::config::get("github.token") {
         req = req.set("Authorization", &format!("Bearer {}", token));
     }
 

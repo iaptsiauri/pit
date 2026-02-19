@@ -72,6 +72,38 @@ enum Commands {
         /// Task name
         name: String,
     },
+
+    /// Manage configuration (API keys, preferences)
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Set a config value (e.g. pit config set linear.api_key <key>)
+    Set {
+        /// Config key (e.g. linear.api_key, github.token)
+        key: String,
+        /// Value to set
+        value: String,
+    },
+    /// Get a config value
+    Get {
+        /// Config key
+        key: String,
+    },
+    /// Remove a config value
+    Unset {
+        /// Config key
+        key: String,
+    },
+    /// List all config values
+    #[command(alias = "ls")]
+    List,
+    /// Show config file path
+    Path,
 }
 
 fn main() -> Result<()> {
@@ -93,6 +125,7 @@ fn main() -> Result<()> {
         Some(Commands::Stop { name }) => cmd_stop(&name)?,
         Some(Commands::Diff { name }) => cmd_diff(&name)?,
         Some(Commands::Delete { name }) => cmd_delete(&name)?,
+        Some(Commands::Config { action }) => cmd_config(action)?,
     }
 
     Ok(())
@@ -280,6 +313,59 @@ fn cmd_delete(name: &str) -> Result<()> {
     task::delete(&project.db, &project.repo_root, t.id)?;
     println!("Deleted task '{}'", name);
     Ok(())
+}
+
+fn cmd_config(action: ConfigAction) -> Result<()> {
+    use crate::core::config;
+
+    match action {
+        ConfigAction::Set { key, value } => {
+            config::set(&key, &value)?;
+            println!("Set {} = {}", key, mask_secret(&key, &value));
+        }
+        ConfigAction::Get { key } => {
+            match config::get(&key) {
+                Some(value) => println!("{} = {}", key, mask_secret(&key, &value)),
+                None => println!("{} is not set", key),
+            }
+        }
+        ConfigAction::Unset { key } => {
+            config::unset(&key)?;
+            println!("Removed {}", key);
+        }
+        ConfigAction::List => {
+            let all = config::list();
+            if all.is_empty() {
+                println!("No config values set.");
+                println!("  Config file: {}", config::config_path().display());
+                println!();
+                println!("  Example:");
+                println!("    pit config set linear.api_key lin_api_...");
+                println!("    pit config set github.token ghp_...");
+            } else {
+                let mut keys: Vec<&String> = all.keys().collect();
+                keys.sort();
+                for key in keys {
+                    println!("{} = {}", key, mask_secret(key, &all[key]));
+                }
+            }
+        }
+        ConfigAction::Path => {
+            println!("{}", config::config_path().display());
+        }
+    }
+    Ok(())
+}
+
+/// Mask sensitive values in output (show first 4 + last 4 chars).
+fn mask_secret(key: &str, value: &str) -> String {
+    let is_secret = key.contains("key") || key.contains("token") || key.contains("secret");
+    if !is_secret || value.len() < 12 {
+        return value.to_string();
+    }
+    let prefix: String = value.chars().take(4).collect();
+    let suffix: String = value.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{}...{}", prefix, suffix)
 }
 
 fn open_project() -> Result<Project> {

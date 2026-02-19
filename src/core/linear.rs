@@ -49,8 +49,8 @@ pub fn is_linear_url(url: &str) -> bool {
 /// Fetch an issue from Linear by identifier (e.g. "PROJ-123").
 /// Requires `LINEAR_API_KEY` environment variable.
 pub fn fetch_issue(identifier: &str) -> Result<LinearIssue> {
-    let api_key = std::env::var("LINEAR_API_KEY")
-        .context("LINEAR_API_KEY environment variable not set")?;
+    let api_key = super::config::get("linear.api_key")
+        .context("Linear API key not set. Run: pit config set linear.api_key <your-key>")?;
 
     let query = format!(
         r#"{{
