@@ -8,7 +8,7 @@ use crate::core::task::Status;
 
 use super::app::{App, ModalField, Mode, Pane, View};
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(3)])
@@ -107,7 +107,7 @@ fn draw_task_list(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 
 // ── Detail pane (right side) ────────────────────────────────────────────────
 
-fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
+fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let border_color = if focused {
         Color::Yellow
     } else {
@@ -137,6 +137,9 @@ fn draw_detail_pane(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
         width: area.width.saturating_sub(4),
         height: area.height.saturating_sub(2),
     };
+
+    // Store the pane height so App can auto-scroll after key events
+    app.detail_pane_height = inner.height;
 
     // Build all lines for the detail view
     let mut lines: Vec<Line> = Vec::new();

@@ -176,6 +176,8 @@ pub struct App {
     pub kanban_col: usize,
     /// Kanban: selected row within each column
     pub kanban_row: [usize; 3],
+    /// Cached detail pane inner height (set during render).
+    pub detail_pane_height: u16,
 }
 
 impl App {
@@ -202,6 +204,7 @@ impl App {
             file_diffs: std::collections::HashMap::new(),
             kanban_col: 0,
             kanban_row: [0, 0, 0],
+            detail_pane_height: 30,
         };
         app.refresh_detail();
         Ok(app)
@@ -484,6 +487,98 @@ impl App {
                 let diff = git_info::file_diff(&self.repo_root, &task.branch, &file.path);
                 self.file_diffs.insert(idx, diff);
             }
+        }
+    }
+
+    /// Compute the visual line (within the detail pane content) where the
+    /// cursor currently sits. Used to auto-scroll the detail pane.
+    fn cursor_visual_line(&self) -> usize {
+        let info = match self.detail.as_ref() {
+            Some(i) => i,
+            None => return 0,
+        };
+
+        // Count fixed header lines:
+        // name, status+agent, branch = 3
+        // + prompt (if set) + issue (if set)
+        // + blank
+        // + commits header + commits + blank
+        // + files header
+        let task = match self.tasks.get(self.selected) {
+            Some(t) => t,
+            None => return 0,
+        };
+
+        let mut line: usize = 3; // name, status, branch
+        if !task.prompt.is_empty() {
+            line += 1;
+        }
+        if !task.issue_url.is_empty() {
+            line += 1;
+        }
+        line += 1; // blank
+
+        // Commits header + commits + blank
+        line += 1; // "── Commits (N) ──"
+        if info.commits.is_empty() {
+            line += 1; // "No commits yet"
+        } else {
+            line += info.commits.len();
+        }
+        line += 1; // blank
+
+        // Files header
+        line += 1; // "── Changes (N file(s)) ──"
+
+        if info.files.is_empty() {
+            line += 1; // "No changes"
+            return line;
+        }
+
+        // Now count through files up to the cursor
+        let cursor_file = match self.file_cursor {
+            Some(f) => f,
+            None => return line, // no file selected, cursor is at top
+        };
+
+        for idx in 0..=cursor_file.min(info.files.len().saturating_sub(1)) {
+            if idx == cursor_file {
+                // We're at the file header line for the cursor file
+                if let Some(dl) = self.diff_line {
+                    // Cursor is inside the expanded diff
+                    line += 1; // the file header line itself
+                    line += dl; // the diff line offset
+                    return line;
+                }
+                return line; // cursor is on the file header
+            }
+
+            // Count this file's line(s)
+            line += 1; // file header
+            if self.expanded_files.contains(&idx) {
+                let diff_count = self.file_diffs.get(&idx).map(|d| d.len()).unwrap_or(0);
+                if diff_count == 0 {
+                    line += 1; // "(no diff content)"
+                } else {
+                    line += diff_count;
+                }
+                line += 1; // blank line after diff
+            }
+        }
+
+        line
+    }
+
+    /// Adjust `detail_scroll` so the cursor is visible within the detail pane.
+    /// `pane_height` is the inner height of the detail area.
+    pub fn scroll_detail_to_cursor(&mut self, pane_height: u16) {
+        let cursor_line = self.cursor_visual_line() as u16;
+        let h = pane_height.saturating_sub(1); // leave 1 line margin
+
+        if cursor_line < self.detail_scroll {
+            self.detail_scroll = cursor_line;
+        } else if cursor_line >= self.detail_scroll + h {
+            self.detail_scroll = cursor_line.saturating_sub(h) + 1;
         }
     }
 
@@ -987,6 +1082,11 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
         terminal.draw(|frame| ui::draw(frame, app))?;
 
+        // Auto-scroll detail pane to keep cursor visible
+        if app.focus == Pane::Detail {
+            app.scroll_detail_to_cursor(app.detail_pane_height);
+        }
+
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != crossterm::event::KeyEventKind::Press {
@@ -1254,6 +1354,7 @@ mod tests {
             file_diffs: std::collections::HashMap::new(),
             kanban_col: 0,
             kanban_row: [0, 0, 0],
+            detail_pane_height: 30,
         }
     }
 
@@ -2118,6 +2219,69 @@ mod tests {
 
         app.handle_key(KeyCode::PageUp, KeyModifiers::NONE).unwrap();
         assert_eq!(app.detail_scroll, 10);
+    }
+
+    #[test]
+    fn cursor_visual_line_on_file_header() {
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
+        app.focus = Pane::Detail;
+        app.file_cursor = Some(0);
+
+        let line = app.cursor_visual_line();
+        // Should be after: name, status, branch, blank, commits header,
+        // "No commits yet", blank, files header = 8 lines
+        assert!(line >= 7, "cursor_visual_line={}", line);
+    }
+
+    #[test]
+    fn cursor_visual_line_inside_expanded_diff() {
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
+        app.focus = Pane::Detail;
+        app.file_cursor = Some(0);
+        app.expanded_files.insert(0);
+        app.file_diffs.insert(
+            0,
+            vec!["+ line1".into(), "- line2".into(), "  line3".into()],
+        );
+        app.diff_line = Some(2);
+
+        let line = app.cursor_visual_line();
+        // Should be file_header_line + 1 (header) + 2 (diff_line index)
+        let header_line = {
+            let mut a2 =
+                make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
+            a2.file_cursor = Some(0);
+            a2.cursor_visual_line()
+        };
+        assert_eq!(line, header_line + 1 + 2);
+    }
+
+    #[test]
+    fn scroll_detail_to_cursor_scrolls_down() {
+        let mut app =
+            make_app_with_files(vec![make_task(1, "a", task::Status::Idle)], sample_files());
+        app.focus = Pane::Detail;
+        app.detail_pane_height = 10;
+        app.detail_scroll = 0;
+
+        // Put cursor on a line that's beyond the visible area
+        app.file_cursor = Some(1);
+        app.expanded_files.insert(0);
+        app.file_diffs
+            .insert(0, (0..20).map(|i| format!("+ line {}", i)).collect());
+
+        app.scroll_detail_to_cursor(app.detail_pane_height);
+        // Cursor should be visible now — scroll > 0
+        let cursor = app.cursor_visual_line() as u16;
+        assert!(
+            cursor >= app.detail_scroll && cursor < app.detail_scroll + app.detail_pane_height,
+            "cursor={} scroll={} height={}",
+            cursor,
+            app.detail_scroll,
+            app.detail_pane_height
+        );
     }
 
     #[test]
