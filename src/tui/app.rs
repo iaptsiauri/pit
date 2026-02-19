@@ -826,7 +826,18 @@ impl App {
             (KeyCode::Char('c'), _) => {
                 if let Some(t) = self.tasks.get(self.selected) {
                     let worktree = std::path::Path::new(&t.worktree);
-                    match checkpoint::create(&self.repo_root, &t.name, &t.branch, worktree) {
+                    // Capture agent output if task is running
+                    let agent_output = t
+                        .tmux_session
+                        .as_deref()
+                        .and_then(|name| tmux::capture_pane(name, 50).ok());
+                    match checkpoint::create(
+                        &self.repo_root,
+                        &t.name,
+                        &t.branch,
+                        worktree,
+                        agent_output.as_deref(),
+                    ) {
                         Ok(idx) => {
                             self.error = Some(format!("✓ Checkpoint #{} saved", idx));
                             self.force_refresh_detail();

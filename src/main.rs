@@ -363,13 +363,33 @@ fn cmd_checkpoint(name: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("task '{}' not found", name))?;
 
     let worktree = std::path::Path::new(&t.worktree);
-    let idx = core::checkpoint::create(&project.repo_root, &t.name, &t.branch, worktree)?;
+    // Capture agent output if running
+    let agent_output = t
+        .tmux_session
+        .as_deref()
+        .and_then(|name| tmux::capture_pane(name, 50).ok());
+    let idx = core::checkpoint::create(
+        &project.repo_root,
+        &t.name,
+        &t.branch,
+        worktree,
+        agent_output.as_deref(),
+    )?;
 
-    // List all checkpoints to show context
+    // Show the new checkpoint with its annotation
     let checkpoints = core::checkpoint::list(&project.repo_root, &t.name)?;
-    println!("✓ Checkpoint #{} saved for '{}'", idx, name);
+    println!("✓ Checkpoint #{} saved for '{}'\n", idx, name);
+
+    if let Some(cp) = checkpoints.iter().find(|c| c.index == idx) {
+        if !cp.annotation.is_empty() {
+            println!("{}", cp.annotation);
+        }
+    }
+
+    // Summary of all checkpoints
+    println!("All checkpoints:");
     for cp in &checkpoints {
-        let marker = if cp.index == idx { " ←" } else { "" };
+        let marker = if cp.index == idx { " ← new" } else { "" };
         println!(
             "  #{}: {} {}  {}{}",
             cp.index, cp.commit_hash, cp.message, cp.timestamp, marker

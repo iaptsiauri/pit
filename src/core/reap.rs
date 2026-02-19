@@ -27,7 +27,18 @@ pub fn reap_dead(db: &Connection, repo_root: &Path) -> Result<usize> {
             // Auto-checkpoint if the agent made new commits
             let worktree = Path::new(&t.worktree);
             if checkpoint::has_new_commits(repo_root, &t.name, &t.branch) {
-                let _ = checkpoint::create(repo_root, &t.name, &t.branch, worktree);
+                // Try to capture last agent output (session may already be gone)
+                let agent_output = t
+                    .tmux_session
+                    .as_deref()
+                    .and_then(|name| tmux::capture_pane(name, 50).ok());
+                let _ = checkpoint::create(
+                    repo_root,
+                    &t.name,
+                    &t.branch,
+                    worktree,
+                    agent_output.as_deref(),
+                );
             }
 
             task::set_status(db, t.id, &Status::Idle)?;

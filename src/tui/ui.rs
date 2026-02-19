@@ -331,7 +331,17 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
                         ),
                     ]));
                     for cp in &checkpoints {
-                        lines.push(Line::from(vec![
+                        // Count Done items in annotation
+                        let done_count = cp
+                            .annotation
+                            .lines()
+                            .skip_while(|l| !l.starts_with("## Done"))
+                            .skip(1)
+                            .take_while(|l| l.starts_with("- "))
+                            .count();
+                        let has_context = cp.annotation.contains("## Agent Context");
+
+                        let mut spans = vec![
                             Span::styled(
                                 format!("  #{} ", cp.index),
                                 Style::default().fg(Color::Magenta),
@@ -348,7 +358,24 @@ fn draw_detail_pane(frame: &mut Frame, app: &mut App, area: Rect, focused: bool)
                                 format!("  {}", cp.timestamp),
                                 Style::default().fg(Color::DarkGray),
                             ),
-                        ]));
+                        ];
+
+                        // Annotation indicators
+                        if done_count > 0 || has_context {
+                            let mut indicators = String::from("  ");
+                            if done_count > 0 {
+                                indicators.push_str(&format!("{}✓", done_count));
+                            }
+                            if has_context {
+                                if done_count > 0 {
+                                    indicators.push(' ');
+                                }
+                                indicators.push_str("📋");
+                            }
+                            spans.push(Span::styled(indicators, Style::default().fg(Color::Green)));
+                        }
+
+                        lines.push(Line::from(spans));
                     }
                     lines.push(Line::from(""));
                 }
