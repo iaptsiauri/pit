@@ -4,7 +4,9 @@ use rusqlite::Connection;
 use super::task::{self, Status};
 use super::tmux;
 
-/// Check all "running" tasks and mark as "done" if their tmux session is gone.
+/// Check all "running" tasks and mark as "idle" if their tmux session is gone.
+/// The agent exited (or crashed), but the task still exists with its worktree —
+/// the user can re-enter and continue. "Done" is reserved for explicit completion.
 /// Returns the number of tasks reaped.
 pub fn reap_dead(db: &Connection) -> Result<usize> {
     let tasks = task::list(db)?;
@@ -21,7 +23,7 @@ pub fn reap_dead(db: &Connection) -> Result<usize> {
         };
 
         if !is_alive {
-            task::set_status(db, t.id, &Status::Done)?;
+            task::set_status(db, t.id, &Status::Idle)?;
             reaped += 1;
         }
     }
@@ -34,7 +36,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reap_marks_orphaned_tasks_as_done() {
+    fn reap_marks_orphaned_tasks_as_idle() {
         let db = crate::db::open_memory().unwrap();
 
         // Insert a task that claims to be running with a tmux session that doesn't exist
@@ -49,7 +51,7 @@ mod tests {
         assert_eq!(reaped, 1);
 
         let t = task::get(&db, 1).unwrap().unwrap();
-        assert_eq!(t.status, Status::Done);
+        assert_eq!(t.status, Status::Idle);
     }
 
     #[test]
@@ -101,6 +103,6 @@ mod tests {
         assert_eq!(reaped, 1);
 
         let t = task::get(&db, 1).unwrap().unwrap();
-        assert_eq!(t.status, Status::Done);
+        assert_eq!(t.status, Status::Idle);
     }
 }

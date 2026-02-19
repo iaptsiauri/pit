@@ -120,6 +120,30 @@ pub fn create_session(name: &str, cwd: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create a new detached tmux session that runs a specific command.
+/// When the command exits, the tmux session is automatically destroyed
+/// (`remain-on-exit off` is the default). This lets the reaper detect
+/// that the agent has finished.
+pub fn create_session_with_cmd(name: &str, cwd: &str, cmd: &str) -> Result<()> {
+    let mut args = base_args();
+    args.extend([
+        "new-session".into(),
+        "-d".into(),
+        "-s".into(),
+        name.into(),
+        "-c".into(),
+        cwd.into(),
+        cmd.into(),
+    ]);
+    let output = Command::new("tmux").args(&args).output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("tmux new-session failed: {}", stderr.trim());
+    }
+    Ok(())
+}
+
 /// Send keys to a tmux session (typically a command + Enter).
 pub fn send_keys(name: &str, keys: &[&str]) -> Result<()> {
     let mut args = base_args();

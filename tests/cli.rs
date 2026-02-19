@@ -484,14 +484,14 @@ fn status_reaps_dead_sessions() {
     // Wait a moment
     thread::sleep(Duration::from_millis(100));
 
-    // Status should now show "done" (reaped)
+    // Status should now show "idle" (reaped — agent exited, task still exists)
     Command::cargo_bin("pit")
         .unwrap()
         .arg("status")
         .current_dir(repo.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("done"));
+        .stdout(predicate::str::contains("idle"));
 }
 
 #[test]
@@ -586,12 +586,12 @@ fn list_also_reaps() {
 
     thread::sleep(Duration::from_millis(100));
 
-    // List should show done (reaped)
+    // List should show idle (reaped — agent exited, task still exists)
     Command::cargo_bin("pit")
         .unwrap()
         .arg("list")
         .current_dir(repo.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("done"));
+        .stdout(predicate::str::contains("idle"));
 }

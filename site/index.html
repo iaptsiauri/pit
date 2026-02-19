@@ -239,7 +239,7 @@
       line-height: 1.7;
     }
 
-    /* ── Feature grid ────────────────────────────── */
+    /* ── Feature grid (still used for requirements) ─ */
     .feature-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -268,6 +268,95 @@
       font-size: 0.88rem;
       color: var(--text-dim);
       line-height: 1.6;
+    }
+
+    /* ── Highlighted heading ──────────────────────── */
+    .heading-highlight {
+      background: linear-gradient(135deg, rgba(250, 204, 21, 0.18), rgba(250, 204, 21, 0.08));
+      padding: 2px 8px;
+      border-radius: 6px;
+      -webkit-box-decoration-break: clone;
+      box-decoration-break: clone;
+    }
+
+    /* ── Two-col feature section ─────────────────── */
+    .feature-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-top: 48px;
+    }
+    .feature-split .terminal {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    .feature-split .terminal pre {
+      flex: 1;
+    }
+
+    /* ── Capability table ────────────────────────── */
+    .cap-table {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .cap-table-header {
+      display: flex;
+      justify-content: space-between;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .cap-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+    .cap-row:last-child { border-bottom: none; }
+    .cap-row:hover { background: rgba(255,255,255,0.02); }
+    .cap-row-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .cap-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .cap-row-name {
+      font-size: 0.92rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .cap-badge {
+      font-size: 0.78rem;
+      font-weight: 500;
+      padding: 3px 12px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .cap-badge.active {
+      color: var(--green);
+      background: rgba(74, 222, 128, 0.1);
+    }
+    .cap-badge.built-in {
+      color: var(--cyan);
+      background: rgba(34, 211, 238, 0.1);
+    }
+    .cap-badge.auto {
+      color: var(--purple);
+      background: rgba(192, 132, 252, 0.1);
     }
 
     /* ── How it works ────────────────────────────── */
@@ -410,6 +499,7 @@
       .step { grid-template-columns: 1fr; gap: 12px; }
       .step-num { width: 32px; height: 32px; font-size: 0.75rem; }
       .feature-grid { grid-template-columns: 1fr; }
+      .feature-split { grid-template-columns: 1fr; }
       .terminal pre { font-size: 0.72rem; padding: 16px; }
     }
   </style>
@@ -461,28 +551,27 @@
           <span class="terminal-dot green"></span>
           <span class="terminal-title">pit — ~/project</span>
         </div>
-        <pre>
-<span class="dim">┌─ Tasks ─────────────┬─ Detail ──────────────────────────────────┐</span>
-<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
-<span class="dim">│</span> <span class="green">▸ ▶ fix-login-bug</span>   <span class="dim">│</span>  <span class="white"><b>fix-login-bug</b></span>                          <span class="dim">│</span>
-<span class="dim">│</span>   <span class="green">▶</span> <span class="white">add-pagination</span>  <span class="dim">│</span>  <span class="green">▶ running</span>  <span class="dim">·</span>  <span class="dim">agent: claude</span>            <span class="dim">│</span>
-<span class="dim">│</span>   <span class="blue">✓</span> <span class="white">refactor-api</span>    <span class="dim">│</span>  <span class="dim">branch:</span> <span class="cyan">pit/fix-login-bug</span>              <span class="dim">│</span>
-<span class="dim">│</span>   <span class="dim">○</span> <span class="white">update-tests</span>    <span class="dim">│</span>  <span class="dim">prompt:</span> <span class="dim">Fix the login timeout issue</span>    <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent"><b>── Commits (2) ──────────────────────</b></span>  <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent">a3f12b4</span> <span class="white">fix session timeout logic</span>      <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent">e7c9a01</span> <span class="white">add retry on auth failure</span>      <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="accent"><b>── Changes (3 files) ───────────────</b></span> <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">▸</span> <span class="white">src/auth.rs</span>       <span class="green">+42</span>  <span class="red">-8</span>        <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">▸</span> <span class="white">src/session.rs</span>    <span class="green">+15</span>  <span class="red">-3</span>        <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">▸</span> <span class="white">tests/auth_test.rs</span> <span class="green">+28</span>            <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>  <span class="dim">total:</span> <span class="green">+85</span>  <span class="red">-11</span>                        <span class="dim">│</span>
-<span class="dim">│</span>                     <span class="dim">│</span>                                           <span class="dim">│</span>
-<span class="dim">├─────────────────────┴───────────────────────────────────────────┤</span>
-<span class="dim">│</span> <span class="accent">Enter</span>:open  <span class="accent">l/→</span>:detail  <span class="accent">b</span>:bg  <span class="accent">n</span>:new  <span class="accent">d</span>:del  <span class="accent">r</span>:refresh  <span class="accent">q</span>:quit <span class="dim">│</span>
-<span class="dim">└─────────────────────────────────────────────────────────────────┘</span></pre>
+        <pre><span class="dim">┌─ Tasks ────────────┬─ Detail ─────────────────────────────────┐
+│                    │                                          │
+│</span> <span class="green">▸ ▶</span> <span class="green">fix-login-bug</span>  <span class="dim">│</span>  <span class="white"><b>fix-login-bug</b></span>                         <span class="dim">│
+│</span>   <span class="green">▶</span> <span class="white">add-pagination</span> <span class="dim">│</span>  <span class="green">▶ running</span>  <span class="dim">·  agent: claude</span>           <span class="dim">│
+│</span>   <span class="blue">✓</span> <span class="white">refactor-api</span>   <span class="dim">│</span>  <span class="dim">branch:</span> <span class="cyan">pit/fix-login-bug</span>             <span class="dim">│
+│</span>   <span class="dim">○</span> <span class="white">update-tests</span>   <span class="dim">│</span>  <span class="dim">prompt: Fix the login timeout issue</span>   <span class="dim">│
+│                    │                                          │
+│                    │</span>  <span class="accent"><b>── Commits (2) ─────────────────────</b></span> <span class="dim">│
+│                    │</span>  <span class="accent">a3f12b4</span> <span class="white">fix session timeout logic</span>     <span class="dim">│
+│                    │</span>  <span class="accent">e7c9a01</span> <span class="white">add retry on auth failure</span>     <span class="dim">│
+│                    │                                          │
+│                    │</span>  <span class="accent"><b>── Changes (3 files) ──────────────</b></span> <span class="dim">│
+│                    │</span>  <span class="dim">▸</span> <span class="white">src/auth.rs</span>        <span class="green">+42</span>  <span class="red">-8</span>       <span class="dim">│
+│                    │</span>  <span class="dim">▸</span> <span class="white">src/session.rs</span>     <span class="green">+15</span>  <span class="red">-3</span>       <span class="dim">│
+│                    │</span>  <span class="dim">▸</span> <span class="white">tests/auth_test.rs</span> <span class="green">+28</span>           <span class="dim">│
+│                    │                                          │
+│                    │</span>  <span class="dim">total:</span> <span class="green">+85</span>  <span class="red">-11</span>                       <span class="dim">│
+│                    │                                          │
+├────────────────────┴──────────────────────────────────────────┤
+│</span> <span class="accent">Enter</span><span class="dim">:open</span>  <span class="accent">l/→</span><span class="dim">:detail</span>  <span class="accent">b</span><span class="dim">:bg</span>  <span class="accent">n</span><span class="dim">:new</span>  <span class="accent">d</span><span class="dim">:del</span>  <span class="accent">r</span><span class="dim">:refresh</span>  <span class="accent">q</span><span class="dim">:quit │
+└───────────────────────────────────────────────────────────────┘</span></pre>
       </div>
     </div>
   </section>
@@ -491,62 +580,112 @@
   <section class="section" id="features">
     <div class="container">
       <div class="section-tag">[ Features ]</div>
-      <h2>Everything runs, nothing blocks</h2>
+      <h2><span class="heading-highlight">Everything runs, nothing blocks</span></h2>
       <p class="lead">pit manages the boring parts — branching, isolation, process lifecycle — so you can focus on what each agent should actually do.</p>
 
-      <div class="feature-grid">
-        <div class="feature-card">
-          <span class="feature-icon">🌳</span>
-          <h3>Git worktree isolation</h3>
-          <p>Every task gets its own working directory on a dedicated branch. Agents never step on each other's changes. Merge when ready.</p>
+      <div class="feature-split">
+        <!-- Left: Terminal demo -->
+        <div class="terminal">
+          <div class="terminal-bar">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-title">Terminal</span>
+          </div>
+          <pre>
+<span class="dim">my-project</span> <span class="accent">%</span> <span class="white">pit new fix-auth -a claude</span>
+
+<span class="dim">Created task</span> <span class="cyan">'fix-auth'</span>
+<span class="dim">  branch:</span>   <span class="cyan">pit/fix-auth</span>
+<span class="dim">  worktree:</span> <span class="dim">.pit/worktrees/fix-auth</span>
+<span class="dim">  agent:</span>    <span class="white">claude</span>
+
+<span class="dim">my-project</span> <span class="accent">%</span> <span class="white">pit new add-tests -a codex</span>
+
+<span class="dim">Created task</span> <span class="cyan">'add-tests'</span>
+<span class="dim">  branch:</span>   <span class="cyan">pit/add-tests</span>
+<span class="dim">  worktree:</span> <span class="dim">.pit/worktrees/add-tests</span>
+<span class="dim">  agent:</span>    <span class="white">codex</span>
+
+<span class="dim">my-project</span> <span class="accent">%</span> <span class="white">pit status</span>
+
+<span class="green">▶</span> <span class="white">fix-auth</span>         <span class="green">running</span>  <span class="dim">(tmux: pit-fix-auth)</span>
+<span class="green">▶</span> <span class="white">add-tests</span>        <span class="green">running</span>  <span class="dim">(tmux: pit-add-tests)</span>
+<span class="blue">✓</span> <span class="white">refactor-api</span>     <span class="blue">done</span>
+<span class="dim">○</span> <span class="white">update-docs</span>      <span class="dim">idle</span>
+
+<span class="dim">my-project</span> <span class="accent">%</span> <span class="dim">▊</span></pre>
         </div>
 
-        <div class="feature-card">
-          <span class="feature-icon">🪟</span>
-          <h3>tmux-backed sessions</h3>
-          <p>Agents run inside persistent tmux sessions. Switch between them freely — detach, reattach, background. Nothing gets killed.</p>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">📋</span>
-          <h3>TUI dashboard</h3>
-          <p>A full terminal UI with split panes — task list on the left, commit history, file diffs, and change stats on the right. All keyboard-driven.</p>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🔗</span>
-          <h3>Issue integration</h3>
-          <p>Link tasks to GitHub or Linear issues. pit fetches the title and description, then builds the agent prompt automatically from issue context.</p>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">⚡</span>
-          <h3>Background execution</h3>
-          <p>Run agents in detached mode with <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.82rem;">pit run &lt;task&gt;</code>. They keep working while you do something else entirely. Check back whenever.</p>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🔍</span>
-          <h3>Live diff viewer</h3>
-          <p>Expand any changed file right in the dashboard to see the full diff — insertions, deletions, and hunk headers — without leaving pit.</p>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🗄️</span>
-          <h3>SQLite state</h3>
-          <p>All task state lives in a local <code style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:0.82rem;">.pit/pit.db</code> file. No external services, no accounts, no config files to manage.</p>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🧹</span>
-          <h3>Automatic reaping</h3>
-          <p>pit detects when a tmux session exits and marks the task as done. No zombie processes, no stale "running" states.</p>
-        </div>
-
-        <div class="feature-card">
-          <span class="feature-icon">🎲</span>
-          <h3>Smart task names</h3>
-          <p>Skip the naming. pit generates friendly names like <em>brisk-ember</em> or <em>swift-pixel</em> so you can start working immediately.</p>
+        <!-- Right: Capability table -->
+        <div class="cap-table">
+          <div class="cap-table-header">
+            <span>Capability</span>
+            <span>Status</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--green)"></span>
+              <span class="cap-row-name">Git worktree isolation</span>
+            </div>
+            <span class="cap-badge active">Built-in</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--green)"></span>
+              <span class="cap-row-name">tmux-backed sessions</span>
+            </div>
+            <span class="cap-badge active">Built-in</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--cyan)"></span>
+              <span class="cap-row-name">TUI dashboard</span>
+            </div>
+            <span class="cap-badge built-in">Interactive</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--cyan)"></span>
+              <span class="cap-row-name">Live diff viewer</span>
+            </div>
+            <span class="cap-badge built-in">Interactive</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--green)"></span>
+              <span class="cap-row-name">GitHub &amp; Linear issues</span>
+            </div>
+            <span class="cap-badge active">Built-in</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--green)"></span>
+              <span class="cap-row-name">Background execution</span>
+            </div>
+            <span class="cap-badge active">Built-in</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--purple)"></span>
+              <span class="cap-row-name">Automatic reaping</span>
+            </div>
+            <span class="cap-badge auto">Automatic</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--purple)"></span>
+              <span class="cap-row-name">Smart task names</span>
+            </div>
+            <span class="cap-badge auto">Automatic</span>
+          </div>
+          <div class="cap-row">
+            <div class="cap-row-left">
+              <span class="cap-dot" style="background: var(--green)"></span>
+              <span class="cap-row-name">SQLite state tracking</span>
+            </div>
+            <span class="cap-badge active">Built-in</span>
+          </div>
         </div>
       </div>
     </div>

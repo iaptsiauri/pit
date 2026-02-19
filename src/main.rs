@@ -228,8 +228,7 @@ fn cmd_run(name: &str) -> Result<()> {
 
     let (agent_cmd, session_id) = tui::build_agent_cmd(&t);
 
-    tmux::create_session(&tmux_name, &t.worktree)?;
-    tmux::send_keys(&tmux_name, &[&agent_cmd, "Enter"])?;
+    tmux::create_session_with_cmd(&tmux_name, &t.worktree, &agent_cmd)?;
     task::set_running(&project.db, t.id, &tmux_name, None, Some(&session_id))?;
 
     println!("Started task '{}' ({}) in background (tmux: {})", name, t.agent, tmux_name);

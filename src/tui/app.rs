@@ -820,8 +820,7 @@ fn launch_task(db: &rusqlite::Connection, task: &Task) -> Result<String> {
 
     let (agent_cmd, session_id) = build_agent_cmd(task);
 
-    tmux::create_session(&tmux_name, &task.worktree)?;
-    tmux::send_keys(&tmux_name, &[&agent_cmd, "Enter"])?;
+    tmux::create_session_with_cmd(&tmux_name, &task.worktree, &agent_cmd)?;
     task::set_running(db, task.id, &tmux_name, None, Some(&session_id))?;
 
     Ok(tmux_name)
@@ -834,7 +833,7 @@ fn handle_enter(app: &mut App, task_id: i64) -> Result<()> {
     tmux::attach(&tmux_name)?;
 
     if !tmux::session_exists(&tmux_name) {
-        task::set_status(&db, task_id, &task::Status::Done)?;
+        task::set_status(&db, task_id, &task::Status::Idle)?;
     }
 
     Ok(())
