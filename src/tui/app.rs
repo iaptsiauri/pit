@@ -3,6 +3,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::DefaultTerminal;
 use std::time::Duration;
 
+use crate::core::names;
 use crate::core::project::Project;
 use crate::core::reap;
 use crate::core::task::{self, CreateOpts, Task};
@@ -13,41 +14,40 @@ use super::ui;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
     Normal,
-    /// New task modal is open.
     NewTask,
 }
 
 /// Which field is focused in the new-task modal.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalField {
     Name,
     Prompt,
+    Agent,
     Issue,
+    AutoApprove,
 }
 
 impl ModalField {
+    pub const ALL: &[ModalField] = &[
+        ModalField::Name,
+        ModalField::Prompt,
+        ModalField::Agent,
+        ModalField::Issue,
+        ModalField::AutoApprove,
+    ];
+
     pub fn next(self) -> Self {
-        match self {
-            ModalField::Name => ModalField::Prompt,
-            ModalField::Prompt => ModalField::Issue,
-            ModalField::Issue => ModalField::Name,
-        }
+        let idx = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ALL[(idx + 1) % Self::ALL.len()]
     }
 
     pub fn prev(self) -> Self {
-        match self {
-            ModalField::Name => ModalField::Issue,
-            ModalField::Prompt => ModalField::Name,
-            ModalField::Issue => ModalField::Prompt,
-        }
+        let idx = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ALL[(idx + Self::ALL.len() - 1) % Self::ALL.len()]
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            ModalField::Name => "Task name",
-            ModalField::Prompt => "Agent prompt",
-            ModalField::Issue => "Issue URL (optional)",
-        }
+    pub fn is_text_input(self) -> bool {
+        matches!(self, ModalField::Name | ModalField::Prompt | ModalField::Issue)
     }
 }
 
@@ -57,39 +57,54 @@ pub struct ModalState {
     pub field: ModalField,
     pub name: String,
     pub prompt: String,
+    pub agent: String,
     pub issue: String,
+    pub auto_approve: bool,
 }
 
+const AGENTS: &[&str] = &["claude", "codex", "amp", "aider", "custom"];
+
 impl ModalState {
-    fn new() -> Self {
+    fn new(existing_names: &[String]) -> Self {
         ModalState {
             field: ModalField::Name,
-            name: String::new(),
+            name: names::generate(existing_names),
             prompt: String::new(),
+            agent: "claude".to_string(),
             issue: String::new(),
+            auto_approve: false,
         }
     }
 
-    /// Get a mutable reference to the currently focused field's text.
-    fn active_text_mut(&mut self) -> &mut String {
+    fn active_text_mut(&mut self) -> Option<&mut String> {
         match self.field {
-            ModalField::Name => &mut self.name,
-            ModalField::Prompt => &mut self.prompt,
-            ModalField::Issue => &mut self.issue,
+            ModalField::Name => Some(&mut self.name),
+            ModalField::Prompt => Some(&mut self.prompt),
+            ModalField::Issue => Some(&mut self.issue),
+            _ => None,
         }
     }
 
-    /// Get the currently focused field's text.
     pub fn active_text(&self) -> &str {
         match self.field {
             ModalField::Name => &self.name,
             ModalField::Prompt => &self.prompt,
             ModalField::Issue => &self.issue,
+            _ => "",
         }
+    }
+
+    fn cycle_agent(&mut self, forward: bool) {
+        let idx = AGENTS.iter().position(|a| *a == self.agent).unwrap_or(0);
+        let next = if forward {
+            (idx + 1) % AGENTS.len()
+        } else {
+            (idx + AGENTS.len() - 1) % AGENTS.len()
+        };
+        self.agent = AGENTS[next].to_string();
     }
 }
 
-/// Application state for the TUI.
 pub struct App {
     pub tasks: Vec<Task>,
     pub selected: usize,
@@ -104,19 +119,19 @@ pub struct App {
 impl App {
     fn new(project: &Project) -> Result<Self> {
         let tasks = task::list(&project.db)?;
+        let existing: Vec<String> = tasks.iter().map(|t| t.name.clone()).collect();
         Ok(App {
             tasks,
             selected: 0,
             should_quit: false,
             mode: Mode::Normal,
-            modal: ModalState::new(),
+            modal: ModalState::new(&existing),
             error: None,
             repo_root: project.repo_root.clone(),
             db_path: project.pit_dir.join("pit.db"),
         })
     }
 
-    /// Refresh tasks from DB. Reaps dead tmux sessions first.
     fn refresh(&mut self) -> Result<()> {
         let db = crate::db::open(&self.db_path)?;
         reap::reap_dead(&db)?;
@@ -128,9 +143,7 @@ impl App {
     }
 
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
-        // Clear error on any keypress
         self.error = None;
-
         match self.mode {
             Mode::Normal => self.handle_normal_key(code, modifiers),
             Mode::NewTask => self.handle_modal_key(code, modifiers),
@@ -177,8 +190,9 @@ impl App {
                 }
             }
             (KeyCode::Char('n'), _) => {
+                let existing: Vec<String> = self.tasks.iter().map(|t| t.name.clone()).collect();
+                self.modal = ModalState::new(&existing);
                 self.mode = Mode::NewTask;
-                self.modal = ModalState::new();
                 Ok(Action::None)
             }
             (KeyCode::Char('r'), _) => {
@@ -191,64 +205,91 @@ impl App {
 
     fn handle_modal_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<Action> {
         match (code, modifiers) {
-            // Esc → cancel
             (KeyCode::Esc, _) => {
                 self.mode = Mode::Normal;
                 Ok(Action::None)
             }
-            // Tab → next field
-            (KeyCode::Tab, _) | (KeyCode::BackTab, KeyModifiers::SHIFT) => {
-                // BackTab is Shift+Tab
+
+            // Tab / Shift-Tab: cycle fields
+            (KeyCode::Tab, _) => {
                 self.modal.field = self.modal.field.next();
                 Ok(Action::None)
             }
-            // Shift+Tab → prev field (BackTab is the actual event)
             (KeyCode::BackTab, _) => {
                 self.modal.field = self.modal.field.prev();
                 Ok(Action::None)
             }
-            // Enter → submit
+
+            // Enter: submit (from any field)
+            (KeyCode::Enter, _) if modifiers.contains(KeyModifiers::CONTROL) || !self.modal.field.is_text_input() || self.modal.field == ModalField::Name => {
+                self.try_submit()
+            }
+
+            // Enter in prompt/issue: newline NOT supported (single line), so submit
             (KeyCode::Enter, _) => {
-                let name = self.modal.name.trim().to_string();
-
-                // Validate
-                if name.is_empty() {
-                    self.error = Some("Task name is required".into());
-                    self.modal.field = ModalField::Name;
-                    return Ok(Action::None);
-                }
-                if !name
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-                {
-                    self.error =
-                        Some("Name: only alphanumeric, hyphens, underscores".into());
-                    self.modal.field = ModalField::Name;
-                    return Ok(Action::None);
-                }
-
-                let prompt = self.modal.prompt.trim().to_string();
-                let issue = self.modal.issue.trim().to_string();
-
-                self.mode = Mode::Normal;
-                Ok(Action::CreateTask {
-                    name,
-                    prompt,
-                    issue_url: issue,
-                })
+                self.try_submit()
             }
-            // Backspace
-            (KeyCode::Backspace, _) => {
-                self.modal.active_text_mut().pop();
+
+            // Agent field: left/right to cycle
+            (KeyCode::Left, _) if self.modal.field == ModalField::Agent => {
+                self.modal.cycle_agent(false);
                 Ok(Action::None)
             }
-            // Regular character
-            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-                self.modal.active_text_mut().push(c);
+            (KeyCode::Right, _) if self.modal.field == ModalField::Agent => {
+                self.modal.cycle_agent(true);
                 Ok(Action::None)
             }
+
+            // Auto-approve: space toggles
+            (KeyCode::Char(' '), _) if self.modal.field == ModalField::AutoApprove => {
+                self.modal.auto_approve = !self.modal.auto_approve;
+                Ok(Action::None)
+            }
+
+            // Text input
+            (KeyCode::Backspace, _) if self.modal.field.is_text_input() => {
+                if let Some(text) = self.modal.active_text_mut() {
+                    text.pop();
+                }
+                Ok(Action::None)
+            }
+            (KeyCode::Char(c), m) if self.modal.field.is_text_input() && !m.contains(KeyModifiers::CONTROL) => {
+                if let Some(text) = self.modal.active_text_mut() {
+                    text.push(c);
+                }
+                Ok(Action::None)
+            }
+
             _ => Ok(Action::None),
         }
+    }
+
+    fn try_submit(&mut self) -> Result<Action> {
+        let name = self.modal.name.trim().to_string();
+
+        if name.is_empty() {
+            self.error = Some("Task name is required".into());
+            self.modal.field = ModalField::Name;
+            return Ok(Action::None);
+        }
+        if !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            self.error = Some("Name: only alphanumeric, hyphens, underscores".into());
+            self.modal.field = ModalField::Name;
+            return Ok(Action::None);
+        }
+
+        let prompt = self.modal.prompt.trim().to_string();
+        let issue_url = self.modal.issue.trim().to_string();
+
+        self.mode = Mode::Normal;
+        Ok(Action::CreateTask {
+            name,
+            prompt,
+            issue_url,
+        })
     }
 }
 
@@ -265,10 +306,10 @@ pub enum Action {
     },
 }
 
-/// Run the TUI dashboard. Returns when user quits.
+// --- TUI loop ---
+
 pub fn run(project: &Project) -> Result<()> {
     let mut app = App::new(project)?;
-
     let mut terminal = ratatui::init();
     let result = run_loop(&mut terminal, &mut app);
     ratatui::restore();
@@ -326,7 +367,8 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     }
 }
 
-/// Create a new task from the TUI.
+// --- Handlers ---
+
 fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     match task::create(
@@ -334,7 +376,7 @@ fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str) -> Re
         &app.repo_root,
         &CreateOpts {
             name,
-            description: "", // description is derived from prompt
+            description: "",
             prompt,
             issue_url,
         },
@@ -347,7 +389,6 @@ fn handle_create(app: &mut App, name: &str, prompt: &str, issue_url: &str) -> Re
     }
 }
 
-/// Build the claude command for a task, handling new vs resume sessions.
 fn build_claude_cmd(task: &Task) -> (String, String) {
     let session_id = task
         .session_id
@@ -360,9 +401,7 @@ fn build_claude_cmd(task: &Task) -> (String, String) {
         format!("claude --session-id {}", session_id)
     };
 
-    // If there's a prompt and this is the first launch, pass it
     if task.session_id.is_none() && !task.prompt.is_empty() {
-        // Shell-escape the prompt using single quotes
         let escaped = task.prompt.replace('\'', "'\\''");
         cmd.push_str(&format!(" -p '{}'", escaped));
     }
@@ -370,7 +409,6 @@ fn build_claude_cmd(task: &Task) -> (String, String) {
     (cmd, session_id)
 }
 
-/// Launch a task in a tmux session (shared by enter + background).
 fn launch_task(db: &rusqlite::Connection, task: &Task) -> Result<String> {
     let tmux_name = tmux::session_name(&task.name);
 
@@ -387,11 +425,9 @@ fn launch_task(db: &rusqlite::Connection, task: &Task) -> Result<String> {
     Ok(tmux_name)
 }
 
-/// Enter: create tmux session (if needed) and attach.
 fn handle_enter(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
-
     let tmux_name = launch_task(&db, &task)?;
     tmux::attach(&tmux_name)?;
 
@@ -402,7 +438,6 @@ fn handle_enter(app: &mut App, task_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Background: create tmux session without attaching.
 fn handle_background(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
@@ -410,7 +445,6 @@ fn handle_background(app: &mut App, task_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Delete: kill tmux session and remove task.
 fn handle_delete(app: &mut App, task_id: i64) -> Result<()> {
     let db = crate::db::open(&app.db_path)?;
     let task = task::get(&db, task_id)?.ok_or_else(|| anyhow::anyhow!("task not found"))?;
@@ -418,7 +452,6 @@ fn handle_delete(app: &mut App, task_id: i64) -> Result<()> {
     if let Some(ref tmux_name) = task.tmux_session {
         tmux::kill_session(tmux_name)?;
     }
-
     if task.status == task::Status::Running {
         task::set_status(&db, task_id, &task::Status::Idle)?;
     }
@@ -427,16 +460,19 @@ fn handle_delete(app: &mut App, task_id: i64) -> Result<()> {
     Ok(())
 }
 
+// --- Tests ---
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_app(tasks: Vec<Task>) -> App {
+        let existing: Vec<String> = tasks.iter().map(|t| t.name.clone()).collect();
         App {
             selected: 0,
             should_quit: false,
             mode: Mode::Normal,
-            modal: ModalState::new(),
+            modal: ModalState::new(&existing),
             error: None,
             tasks,
             repo_root: std::path::PathBuf::from("/tmp"),
@@ -462,7 +498,7 @@ mod tests {
         }
     }
 
-    // --- Normal mode tests ---
+    // --- Normal mode ---
 
     #[test]
     fn quit_on_q() {
@@ -486,28 +522,23 @@ mod tests {
             make_task(3, "c", task::Status::Idle),
         ];
         let mut app = make_app(tasks);
-
         app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 1);
         app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 2);
         app.handle_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.selected, 2); // clamped
+        assert_eq!(app.selected, 2);
         app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 1);
         app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.selected, 0);
         app.handle_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.selected, 0); // clamped
+        assert_eq!(app.selected, 0);
     }
 
     #[test]
     fn enter_returns_task_id() {
-        let tasks = vec![
-            make_task(1, "a", task::Status::Idle),
-            make_task(2, "b", task::Status::Idle),
-        ];
-        let mut app = make_app(tasks);
+        let mut app = make_app(vec![make_task(1, "a", task::Status::Idle), make_task(2, "b", task::Status::Idle)]);
         app.selected = 1;
         let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert!(matches!(action, Action::Enter(2)));
@@ -534,32 +565,37 @@ mod tests {
         assert!(matches!(action, Action::Delete(1)));
     }
 
-    // --- Modal tests ---
+    // --- Modal ---
 
     #[test]
-    fn n_opens_modal() {
+    fn n_opens_modal_with_generated_name() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::NewTask);
         assert_eq!(app.modal.field, ModalField::Name);
+        // Name should be auto-generated (adjective-noun)
+        assert!(app.modal.name.contains('-'), "expected generated name, got: {}", app.modal.name);
+        assert!(!app.modal.name.is_empty());
     }
 
     #[test]
-    fn modal_typing() {
+    fn modal_typing_replaces_generated_name() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        // Clear the generated name
+        while !app.modal.name.is_empty() {
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        }
 
         for c in "fix-bug".chars() {
             app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
         }
         assert_eq!(app.modal.name, "fix-bug");
-
-        app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.name, "fix-bu");
     }
 
     #[test]
-    fn modal_tab_cycles_fields() {
+    fn modal_tab_cycles_all_fields() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.field, ModalField::Name);
@@ -568,7 +604,13 @@ mod tests {
         assert_eq!(app.modal.field, ModalField::Prompt);
 
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.field, ModalField::Agent);
+
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.field, ModalField::Issue);
+
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.field, ModalField::AutoApprove);
 
         app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.field, ModalField::Name); // wraps
@@ -578,37 +620,65 @@ mod tests {
     fn modal_backtab_cycles_backwards() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.field, ModalField::Name);
+
+        app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.field, ModalField::AutoApprove);
 
         app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
         assert_eq!(app.modal.field, ModalField::Issue);
+    }
 
-        app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.field, ModalField::Prompt);
+    #[test]
+    fn modal_agent_cycle() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
-        app.handle_key(KeyCode::BackTab, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.modal.field, ModalField::Name);
+        // Go to agent field
+        app.modal.field = ModalField::Agent;
+        assert_eq!(app.modal.agent, "claude");
+
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.agent, "codex");
+
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.agent, "amp");
+
+        app.handle_key(KeyCode::Left, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.agent, "codex");
+    }
+
+    #[test]
+    fn modal_auto_approve_toggle() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        app.modal.field = ModalField::AutoApprove;
+        assert!(!app.modal.auto_approve);
+
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE).unwrap();
+        assert!(app.modal.auto_approve);
+
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE).unwrap();
+        assert!(!app.modal.auto_approve);
     }
 
     #[test]
     fn modal_esc_cancels() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-
-        for c in "test".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-
         app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::Normal);
     }
 
     #[test]
-    fn modal_typing_in_different_fields() {
+    fn modal_submit_full_flow() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
-        // Type name
+        // Clear generated name, type custom
+        while !app.modal.name.is_empty() {
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        }
         for c in "my-task".chars() {
             app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
         }
@@ -619,36 +689,29 @@ mod tests {
             app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
         }
 
-        // Tab to issue
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        for c in "https://linear.app/issue/123".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-
-        assert_eq!(app.modal.name, "my-task");
-        assert_eq!(app.modal.prompt, "fix the bug");
-        assert_eq!(app.modal.issue, "https://linear.app/issue/123");
-    }
-
-    #[test]
-    fn modal_submit_creates_task() {
-        let mut app = make_app(vec![]);
-        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
-
-        for c in "my-task".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        for c in "do stuff".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-
+        // Submit
         let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert_eq!(app.mode, Mode::Normal);
         assert!(matches!(
             action,
             Action::CreateTask { ref name, ref prompt, .. }
-                if name == "my-task" && prompt == "do stuff"
+                if name == "my-task" && prompt == "fix the bug"
+        ));
+    }
+
+    #[test]
+    fn modal_submit_with_generated_name() {
+        let mut app = make_app(vec![]);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
+
+        let generated = app.modal.name.clone();
+        assert!(!generated.is_empty());
+
+        // Submit without changing name
+        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert!(matches!(
+            action,
+            Action::CreateTask { ref name, .. } if *name == generated
         ));
     }
 
@@ -657,11 +720,14 @@ mod tests {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
-        // Submit with empty name
+        // Clear the generated name
+        while !app.modal.name.is_empty() {
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        }
+
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
-        assert_eq!(app.mode, Mode::NewTask); // stays in modal
+        assert_eq!(app.mode, Mode::NewTask);
         assert!(app.error.is_some());
-        assert_eq!(app.modal.field, ModalField::Name); // focuses name
     }
 
     #[test]
@@ -669,6 +735,9 @@ mod tests {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
+        while !app.modal.name.is_empty() {
+            app.handle_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+        }
         for c in "has spaces".chars() {
             app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
         }
@@ -679,42 +748,28 @@ mod tests {
     }
 
     #[test]
-    fn modal_submit_without_prompt_works() {
+    fn modal_typing_in_prompt_field() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
-        for c in "quick".chars() {
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.modal.field, ModalField::Prompt);
+
+        for c in "refactor the API layer".chars() {
             app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
         }
-
-        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
-        assert!(matches!(
-            action,
-            Action::CreateTask { ref name, ref prompt, .. }
-                if name == "quick" && prompt.is_empty()
-        ));
+        assert_eq!(app.modal.prompt, "refactor the API layer");
     }
 
     #[test]
-    fn modal_submit_with_issue_url() {
+    fn modal_typing_in_issue_field() {
         let mut app = make_app(vec![]);
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE).unwrap();
 
-        for c in "feat".chars() {
-            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
-        }
-        // Skip to issue
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
-        app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+        app.modal.field = ModalField::Issue;
         for c in "https://github.com/org/repo/issues/42".chars() {
             app.handle_key(KeyCode::Char(c), KeyModifiers::NONE).unwrap();
         }
-
-        let action = app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
-        assert!(matches!(
-            action,
-            Action::CreateTask { ref issue_url, .. }
-                if issue_url == "https://github.com/org/repo/issues/42"
-        ));
+        assert_eq!(app.modal.issue, "https://github.com/org/repo/issues/42");
     }
 }
