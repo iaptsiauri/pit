@@ -118,9 +118,26 @@ pub fn file_diff_with_worktree(
         .collect()
 }
 
-/// Detect the main branch name (main or master).
-fn detect_main_branch(repo_root: &Path) -> Result<String> {
-    for name in &["main", "master"] {
+/// Detect the default branch name.
+/// Tries: origin HEAD → common names (main, master, develop) → first local branch.
+pub fn detect_main_branch(repo_root: &Path) -> Result<String> {
+    // 1. Check origin's HEAD (most reliable for cloned repos)
+    let output = Command::new("git")
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .current_dir(repo_root)
+        .output();
+    if let Ok(o) = output {
+        if o.status.success() {
+            let refname = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            // refs/remotes/origin/main → main
+            if let Some(name) = refname.strip_prefix("refs/remotes/origin/") {
+                return Ok(name.to_string());
+            }
+        }
+    }
+
+    // 2. Try common branch names
+    for name in &["main", "master", "develop"] {
         let output = Command::new("git")
             .args(["rev-parse", "--verify", &format!("refs/heads/{}", name)])
             .current_dir(repo_root)
@@ -129,7 +146,23 @@ fn detect_main_branch(repo_root: &Path) -> Result<String> {
             return Ok(name.to_string());
         }
     }
-    anyhow::bail!("could not find main or master branch")
+
+    // 3. Fall back to the first branch listed
+    let output = Command::new("git")
+        .args(["branch", "--format=%(refname:short)"])
+        .current_dir(repo_root)
+        .output()?;
+    if output.status.success() {
+        if let Some(first) = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find(|l| !l.is_empty())
+        {
+            return Ok(first.to_string());
+        }
+    }
+
+    // Default to "main" if nothing detected (new repo, no remote, etc.)
+    Ok("main".to_string())
 }
 
 /// Gather git log and diff stat for a task branch.

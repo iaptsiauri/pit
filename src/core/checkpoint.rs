@@ -251,24 +251,12 @@ fn build_annotation(
 
 /// Get commit messages since the last checkpoint (or since main).
 fn gather_done_section(repo_root: &Path, task_name: &str, branch: &str) -> Vec<String> {
-    // Find the base: last checkpoint tag, or main branch
     let base = match list(repo_root, task_name) {
         Ok(cps) if !cps.is_empty() => cps.last().unwrap().tag.clone(),
-        _ => {
-            // Fall back to main/master
-            for name in &["main", "master"] {
-                let output = Command::new("git")
-                    .args(["rev-parse", "--verify", &format!("refs/heads/{}", name)])
-                    .current_dir(repo_root)
-                    .output();
-                if let Ok(o) = output {
-                    if o.status.success() {
-                        return gather_commits_since(repo_root, name, branch);
-                    }
-                }
-            }
-            return vec![];
-        }
+        _ => match super::git_info::detect_main_branch(repo_root) {
+            Ok(main) => main,
+            Err(_) => return vec![],
+        },
     };
 
     gather_commits_since(repo_root, &base, branch)
@@ -418,20 +406,23 @@ fn save_pre_rollback_tag(repo_root: &Path, task_name: &str, worktree: &Path) -> 
 }
 
 fn has_commits_beyond_main(repo_root: &Path, branch: &str) -> bool {
-    for main in &["main", "master"] {
-        let output = Command::new("git")
-            .args(["rev-list", &format!("{}..{}", main, branch), "--count"])
-            .current_dir(repo_root)
-            .output();
+    let main = match super::git_info::detect_main_branch(repo_root) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
 
-        if let Ok(o) = output {
-            if o.status.success() {
-                let count: usize = String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    .parse()
-                    .unwrap_or(0);
-                return count > 0;
-            }
+    let output = Command::new("git")
+        .args(["rev-list", &format!("{}..{}", main, branch), "--count"])
+        .current_dir(repo_root)
+        .output();
+
+    if let Ok(o) = output {
+        if o.status.success() {
+            let count: usize = String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(0);
+            return count > 0;
         }
     }
     false

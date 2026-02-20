@@ -559,16 +559,7 @@ fn open_or_init_project() -> Result<Project> {
     }
 }
 
-/// Detect the main branch name (main or master).
+/// Detect the main branch name.
 fn get_main_branch(repo_root: &std::path::Path) -> Result<String> {
-    for name in &["main", "master"] {
-        let output = std::process::Command::new("git")
-            .args(["rev-parse", "--verify", name])
-            .current_dir(repo_root)
-            .output()?;
-        if output.status.success() {
-            return Ok(name.to_string());
-        }
-    }
-    anyhow::bail!("could not find main or master branch")
+    core::git_info::detect_main_branch(repo_root)
 }
