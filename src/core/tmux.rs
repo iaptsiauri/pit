@@ -38,6 +38,9 @@ set -g status-left-length 20
 set -g status-right '#[fg=#555555]│ #[fg=#e0af68]F1#[fg=#888888] to detach '
 set -g status-right-length 40
 
+# When the command exits, destroy the pane/session immediately
+set -g remain-on-exit off
+
 # Terminal settings
 set -g default-terminal 'xterm-256color'
 set -ga terminal-overrides ',xterm-256color:Tc'

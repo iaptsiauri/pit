@@ -1371,7 +1371,9 @@ fn launch_task(db: &rusqlite::Connection, task: &Task) -> Result<String> {
     let tmux_name = tmux::session_name(&task.name);
 
     if tmux::session_exists(&tmux_name) {
-        return Ok(tmux_name);
+        // Kill stale session and start fresh — the old agent already exited
+        // and the session is just a dead shell prompt.
+        tmux::kill_session(&tmux_name)?;
     }
 
     let (agent_cmd, session_id) = build_agent_cmd(task);
