@@ -95,7 +95,7 @@ fn version_flag_works() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("pit 0.3"));
+        .stdout(predicate::str::contains("pit 0.4"));
 }
 
 #[test]

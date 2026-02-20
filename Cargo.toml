@@ -1,6 +1,6 @@
 [package]
 name = "pit"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Run multiple coding agents in parallel with git worktree isolation"
 license = "MIT"
